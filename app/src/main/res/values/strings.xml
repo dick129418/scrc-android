@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Scrcpy Android</string>
+    <string name="hint_host">被控手机 IP</string>
+    <string name="hint_port">ADB 端口（默认 5555）</string>
+    <string name="label_resolution">分辨率</string>
+    <string name="hint_resolution">选择分辨率策略</string>
+    <string name="hint_max_size">自定义最大边长（像素）</string>
+    <string name="resolution_hint_adapt">将按本机屏幕较长边限制视频：约 %1$d px</string>
+    <string name="resolution_hint_fixed">限制被控画面较长边不超过 %1$d px</string>
+    <string name="resolution_hint_original">不限制分辨率（带宽和发热更高）</string>
+    <string name="resolution_hint_custom">手动指定 scrcpy max_size（较长边上限）</string>
+    <string name="status_connecting_fmt">分辨率：%1$s（max_size=%2$s），正在打开投屏…</string>
+    <string name="action_connect">连接并投屏</string>
+    <string name="status_idle">输入被控手机的无线 ADB 地址后连接</string>
+    <string name="help_text">被控手机需先开启无线调试（或 adb tcpip 5555）。\n两机同一 Wi‑Fi / 热点，首次连接时请在被控端点「允许 USB 调试」。</string>
+</resources>
