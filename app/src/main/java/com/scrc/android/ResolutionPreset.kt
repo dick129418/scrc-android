@@ -12,10 +12,11 @@ enum class ResolutionPreset(
     private val fixedMaxSize: Int?,
 ) {
     ADAPT("适配本机屏幕", null),
-    P720("720p", 720),
-    P1080("1080p", 1080),
-    P1280("1280", 1280),
-    P1920("1920p", 1920),
+    // Phone naming uses short side; scrcpy max_size is the long-side cap.
+    // 720p ≈ 720×1280, 1080p ≈ 1080×1920, 1440p ≈ 1440×2560.
+    P720("720p", 1280),
+    P1080("1080p", 1920),
+    P1440("1440p", 2560),
     ORIGINAL("原始分辨率", 0),
     CUSTOM("自定义", -1),
     ;
@@ -32,7 +33,13 @@ enum class ResolutionPreset(
         fun labels(): Array<String> = entries.map { it.label }.toTypedArray()
 
         fun fromLabel(label: String): ResolutionPreset =
-            entries.firstOrNull { it.label == label } ?: ADAPT
+            entries.firstOrNull { it.label == label }
+                ?: when (label) {
+                    // Migrate old long-side labels to equivalent phone presets.
+                    "1280" -> P720
+                    "1920p" -> P1080
+                    else -> ADAPT
+                }
 
         /**
          * Limit video longer-side to the controller panel's longer side,

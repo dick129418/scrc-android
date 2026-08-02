@@ -10,14 +10,50 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
-    <TextView
-        android:id="@+id/textMirrorStatus"
+    <!-- 可拖动浮层：展开为面板，空闲后收成小点 -->
+    <FrameLayout
+        android:id="@+id/floatOverlay"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
+        android:layout_gravity="top|start"
         android:layout_marginTop="24dp"
-        android:background="#66000000"
-        android:padding="8dp"
-        android:textColor="@color/white"
-        android:textSize="13sp" />
+        android:layout_marginStart="16dp"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <LinearLayout
+            android:id="@+id/panelOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_float_panel"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="8dp">
+
+            <TextView
+                android:id="@+id/textMirrorStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/switchPowerSave"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/label_power_save"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <View
+            android:id="@+id/dotOverlay"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="@drawable/bg_float_dot"
+            android:contentDescription="@string/label_power_save"
+            android:visibility="gone" />
+    </FrameLayout>
 </FrameLayout>

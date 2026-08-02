@@ -178,6 +178,11 @@ class ScrcpySession(
         videoJob = null
         shellDrainJob?.cancel()
         shellDrainJob = null
+        // 服务端 cleanup 也会恢复，这里主动亮屏更稳妥
+        try {
+            controlWriter?.setDisplayPowerSync(true)
+        } catch (_: Exception) {
+        }
         controlWriter?.close()
         controlWriter = null
         decoder.release()

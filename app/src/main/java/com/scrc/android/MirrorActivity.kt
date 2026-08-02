@@ -1,24 +1,38 @@
 package com.scrc.android
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.SurfaceHolder
+import android.view.View
+import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.scrc.android.databinding.ActivityMirrorBinding
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySession.Listener {
     companion object {
         const val EXTRA_HOST = "host"
         const val EXTRA_PORT = "port"
         const val EXTRA_MAX_SIZE = "max_size"
+        const val EXTRA_POWER_SAVE = "power_save"
+        private const val KEY_POWER_SAVE = "power_save"
+        private const val AUTO_COLLAPSE_MS = 3_000L
     }
 
     private lateinit var binding: ActivityMirrorBinding
     private var session: ScrcpySession? = null
+    private var controlReady = false
+    private var overlayExpanded = true
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val autoCollapseRunnable = Runnable { collapseOverlay() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +45,18 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         binding.surfaceView.setOnTouchListener { _, event ->
             handleTouch(event)
             true
+        }
+
+        setupFloatOverlay()
+
+        val preferPowerSave = intent.getBooleanExtra(EXTRA_POWER_SAVE, false)
+        binding.switchPowerSave.isChecked = preferPowerSave
+        binding.switchPowerSave.setOnCheckedChangeListener { _, checked ->
+            persistPowerSave(checked)
+            scheduleAutoCollapse()
+            if (controlReady) {
+                applyDisplayPower(blackout = checked)
+            }
         }
 
         // 系统返回键注入到被控端；再按一次系统返回可退出本页（由用户从最近任务划掉亦可）
@@ -51,9 +77,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         lifecycleScope.launch {
             session?.start()
         }
+        scheduleAutoCollapse()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(autoCollapseRunnable)
         session?.stop()
         session = null
         super.onDestroy()
@@ -72,13 +100,29 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     }
 
     override fun onStatus(message: String) {
-        runOnUiThread { binding.textMirrorStatus.text = message }
+        runOnUiThread {
+            binding.textMirrorStatus.text = message
+            // 连接过程中保持展开，方便看状态
+            if (!controlReady) {
+                expandOverlay(resetTimer = true)
+            }
+        }
     }
 
     override fun onConnected(deviceName: String) {
+        val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
+        val port = intent.getIntExtra(EXTRA_PORT, 5555)
+        if (host.isNotEmpty()) {
+            ConnectionHistoryStore.from(this).remember(host, port, deviceName)
+        }
         runOnUiThread {
             binding.textMirrorStatus.text = "已连接：$deviceName"
             Toast.makeText(this, "已连接 $deviceName", Toast.LENGTH_SHORT).show()
+            controlReady = true
+            if (binding.switchPowerSave.isChecked) {
+                applyDisplayPower(blackout = true)
+            }
+            expandOverlay(resetTimer = true)
         }
     }
 
@@ -90,10 +134,84 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     override fun onDisconnected(error: String?) {
         runOnUiThread {
+            controlReady = false
             if (error != null) {
                 Toast.makeText(this, "断开：$error", Toast.LENGTH_LONG).show()
             }
             if (!isFinishing) finish()
+        }
+    }
+
+    private fun setupFloatOverlay() {
+        binding.dotOverlay.contentDescription = getString(R.string.cd_float_dot)
+        // 仅状态文字可拖动，避免抢走省电开关的触摸
+        binding.textMirrorStatus.setOnTouchListener(
+            FloatDragTouchListener(expandOnTap = false),
+        )
+        // 小点：点击展开，拖动移位
+        binding.dotOverlay.setOnTouchListener(
+            FloatDragTouchListener(expandOnTap = true),
+        )
+    }
+
+    private fun scheduleAutoCollapse() {
+        mainHandler.removeCallbacks(autoCollapseRunnable)
+        if (overlayExpanded) {
+            mainHandler.postDelayed(autoCollapseRunnable, AUTO_COLLAPSE_MS)
+        }
+    }
+
+    private fun expandOverlay(resetTimer: Boolean) {
+        if (!overlayExpanded) {
+            overlayExpanded = true
+            binding.dotOverlay.visibility = View.GONE
+            binding.panelOverlay.visibility = View.VISIBLE
+            binding.panelOverlay.alpha = 0f
+            binding.panelOverlay.animate().alpha(1f).setDuration(150).start()
+        }
+        if (resetTimer) scheduleAutoCollapse()
+    }
+
+    private fun collapseOverlay() {
+        if (!overlayExpanded) return
+        overlayExpanded = false
+        mainHandler.removeCallbacks(autoCollapseRunnable)
+        binding.panelOverlay.animate()
+            .alpha(0f)
+            .setDuration(150)
+            .withEndAction {
+                if (!overlayExpanded) {
+                    binding.panelOverlay.visibility = View.GONE
+                    binding.panelOverlay.alpha = 1f
+                    binding.dotOverlay.visibility = View.VISIBLE
+                    binding.dotOverlay.alpha = 0f
+                    binding.dotOverlay.animate().alpha(1f).setDuration(120).start()
+                }
+            }
+            .start()
+    }
+
+    private fun clampOverlayTranslation(tx: Float, ty: Float): Pair<Float, Float> {
+        val root = binding.root
+        val float = binding.floatOverlay
+        if (root.width <= 0 || root.height <= 0 || float.width <= 0) {
+            return tx to ty
+        }
+        val maxTx = (root.width - float.left - float.width).toFloat().coerceAtLeast(0f)
+        val maxTy = (root.height - float.top - float.height).toFloat().coerceAtLeast(0f)
+        val minTx = -float.left.toFloat()
+        val minTy = -float.top.toFloat()
+        return tx.coerceIn(minTx, maxTx) to ty.coerceIn(minTy, maxTy)
+    }
+
+    private fun applyDisplayPower(blackout: Boolean) {
+        val control = session?.control() ?: return
+        control.setDisplayPower(!blackout)
+    }
+
+    private fun persistPowerSave(enabled: Boolean) {
+        getSharedPreferences(ConnectionHistoryStore.PREFS, MODE_PRIVATE).edit {
+            putBoolean(KEY_POWER_SAVE, enabled)
         }
     }
 
@@ -129,5 +247,60 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         } catch (_: Exception) {
         }
         return true
+    }
+
+    /**
+     * 拖动浮层；点击（未超过 touchSlop）时：小点展开，状态文字则刷新收起计时。
+     */
+    private inner class FloatDragTouchListener(
+        private val expandOnTap: Boolean,
+    ) : View.OnTouchListener {
+        private val touchSlop = ViewConfiguration.get(this@MirrorActivity).scaledTouchSlop
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var downTransX = 0f
+        private var downTransY = 0f
+        private var dragging = false
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            val float = binding.floatOverlay
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    downTransX = float.translationX
+                    downTransY = float.translationY
+                    dragging = false
+                    mainHandler.removeCallbacks(autoCollapseRunnable)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        val (tx, ty) = clampOverlayTranslation(downTransX + dx, downTransY + dy)
+                        float.translationX = tx
+                        float.translationY = ty
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
+                        if (expandOnTap) {
+                            expandOverlay(resetTimer = true)
+                        } else {
+                            scheduleAutoCollapse()
+                        }
+                    } else if (overlayExpanded) {
+                        scheduleAutoCollapse()
+                    }
+                    return true
+                }
+            }
+            return false
+        }
     }
 }

@@ -11,7 +11,24 @@
     <string name="resolution_hint_original">不限制分辨率（带宽和发热更高）</string>
     <string name="resolution_hint_custom">手动指定 scrcpy max_size（较长边上限）</string>
     <string name="status_connecting_fmt">分辨率：%1$s（max_size=%2$s），正在打开投屏…</string>
+    <string name="label_power_save">被控端黑屏（省电）</string>
+    <string name="hint_power_save">关闭被控手机物理屏幕背光，投屏与触控仍可用</string>
+    <string name="cd_float_dot">展开投屏控制</string>
     <string name="action_connect">连接并投屏</string>
+    <string name="action_scan">扫描局域网设备</string>
+    <string name="action_scan_cancel">取消扫描</string>
+    <string name="action_remove_history">删除历史</string>
     <string name="status_idle">输入被控手机的无线 ADB 地址后连接</string>
     <string name="help_text">被控手机需先开启无线调试（或 adb tcpip 5555）。\n两机同一 Wi‑Fi / 热点，首次连接时请在被控端点「允许 USB 调试」。</string>
+    <string name="label_discovered">扫描结果</string>
+    <string name="label_history">连接历史</string>
+    <string name="history_empty">暂无记录。点「连接并投屏」后，地址会出现在这里，点击可快速填入。</string>
+    <string name="scan_no_network">未检测到局域网 IP，请确认已连接 Wi‑Fi 或热点</string>
+    <string name="scan_progress">正在扫描… %1$d/%2$d</string>
+    <string name="scan_done">扫描完成，发现 %1$d 台设备</string>
+    <string name="scan_cancelled">已取消扫描</string>
+    <string name="scan_subnet_hint">本机：%1$s</string>
+    <string name="discovered_secondary">端口 %1$d · 点击填入</string>
+    <string name="history_secondary">端口 %1$d · 点击填入</string>
+    <string name="history_secondary_named">%1$s · 端口 %2$d · 点击填入</string>
 </resources>

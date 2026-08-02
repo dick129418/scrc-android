@@ -61,19 +61,42 @@ class ControlMessageWriter(
         writeAsync(byteArrayOf(ScrcpyConstants.MSG_BACK_OR_SCREEN_ON.toByte(), action.toByte()))
     }
 
+    /**
+     * 控制被控端物理屏幕电源。
+     * @param on true=亮屏，false=黑屏（省电，投屏画面不受影响）
+     */
+    fun setDisplayPower(on: Boolean) {
+        writeAsync(displayPowerBytes(on))
+    }
+
+    /** 断开前同步恢复亮屏，避免异步任务来不及发出 */
+    fun setDisplayPowerSync(on: Boolean) {
+        writeSync(displayPowerBytes(on))
+    }
+
+    private fun displayPowerBytes(on: Boolean): ByteArray =
+        byteArrayOf(
+            ScrcpyConstants.MSG_SET_DISPLAY_POWER.toByte(),
+            if (on) 1 else 0,
+        )
+
     private fun writeAsync(bytes: ByteArray) {
         if (closed.get()) return
         executor.execute {
-            if (closed.get()) return@execute
-            try {
-                synchronized(lock) {
-                    if (closed.get()) return@execute
-                    sink.write(bytes)
-                    sink.flush()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "control write failed: ${e.message}")
+            writeSync(bytes)
+        }
+    }
+
+    private fun writeSync(bytes: ByteArray) {
+        if (closed.get()) return
+        try {
+            synchronized(lock) {
+                if (closed.get()) return
+                sink.write(bytes)
+                sink.flush()
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "control write failed: ${e.message}")
         }
     }
 
