@@ -43,6 +43,8 @@ class ScrcpySession(
     companion object {
         private const val TAG = "ScrcpySession"
         private const val PUSH_MODE = 420 // 0644
+        /** 约 24.8 天，等价于连接期间不自动息屏 */
+        private const val SCREEN_OFF_TIMEOUT_KEEP_AWAKE = "2147483647"
     }
 
     private val running = AtomicBoolean(false)
@@ -62,6 +64,10 @@ class ScrcpySession(
     private var sessionScope = CoroutineScope(sessionJob + Dispatchers.IO)
     private val serverLog = AtomicReference("")
     private var scid: Int = 0
+
+    /** 连接前的息屏超时，断开时写回；null 表示未改动 */
+    private var savedScreenOffTimeout: String? = null
+    private var stayAwakeApplied = false
 
     fun setSurface(surface: Surface?) {
         decoder.setSurface(surface)
@@ -99,6 +105,7 @@ class ScrcpySession(
             delay(150)
 
             listener.onStatus("正在启动服务端 …")
+            enableStayAwake(dataDadb!!)
             startServer(shellDadb!!)
 
             // Wait until server log shows Device, or timeout
@@ -201,6 +208,8 @@ class ScrcpySession(
         videoStream = null
         controlStream = null
         shellStream = null
+        // 先恢复息屏策略，再关 ADB
+        restoreStayAwake(dataDadb)
         try {
             dataDadb?.close()
         } catch (_: Exception) {
@@ -213,6 +222,44 @@ class ScrcpySession(
         shellDadb = null
         sessionJob.cancel()
         listener.onDisconnected(error)
+    }
+
+    /**
+     * 连接期间保持被控端唤醒：
+     * - scrcpy stay_awake：充电时改 stay_on_while_plugged_in（服务端 cleanup 会还原）
+     * - 拉长 screen_off_timeout：无线未充电时官方 stay_awake 无效，需额外处理
+     */
+    private fun enableStayAwake(dadb: Dadb) {
+        try {
+            val old = dadb.shell("settings get system screen_off_timeout").output.trim()
+            if (old.isNotEmpty() && old != "null" && old != SCREEN_OFF_TIMEOUT_KEEP_AWAKE) {
+                savedScreenOffTimeout = old
+            }
+            dadb.shell("settings put system screen_off_timeout $SCREEN_OFF_TIMEOUT_KEEP_AWAKE")
+            // 无线场景下进一步强制保持唤醒（断开时还原）
+            dadb.shell("svc power stayon true")
+            stayAwakeApplied = true
+            Log.i(TAG, "stay awake enabled, previous screen_off_timeout=$old")
+        } catch (e: Exception) {
+            Log.w(TAG, "enable stay awake failed: ${e.message}")
+        }
+    }
+
+    private fun restoreStayAwake(dadb: Dadb?) {
+        if (!stayAwakeApplied || dadb == null) return
+        try {
+            dadb.shell("svc power stayon false")
+            val restore = savedScreenOffTimeout
+            if (restore != null) {
+                dadb.shell("settings put system screen_off_timeout $restore")
+                Log.i(TAG, "restored screen_off_timeout=$restore")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "restore stay awake failed: ${e.message}")
+        } finally {
+            stayAwakeApplied = false
+            savedScreenOffTimeout = null
+        }
     }
 
     private fun pushServer(dadb: Dadb) {
@@ -235,6 +282,7 @@ class ScrcpySession(
             append("control=true ")
             append("tunnel_forward=true ")
             append("cleanup=true ")
+            append("stay_awake=true ")
             append("video_bit_rate=8000000")
             if (maxSize > 0) {
                 append(" max_size=$maxSize")
