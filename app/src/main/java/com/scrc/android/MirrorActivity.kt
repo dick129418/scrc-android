@@ -3,10 +3,12 @@ package com.scrc.android
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewConfiguration
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -22,6 +24,8 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         const val EXTRA_PORT = "port"
         const val EXTRA_MAX_SIZE = "max_size"
         const val EXTRA_POWER_SAVE = "power_save"
+        const val EXTRA_NEW_DISPLAY = "new_display"
+        const val EXTRA_START_APP = "start_app"
         private const val KEY_POWER_SAVE = "power_save"
         private const val AUTO_COLLAPSE_MS = 3_000L
     }
@@ -30,6 +34,8 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private var session: ScrcpySession? = null
     private var controlReady = false
     private var overlayExpanded = true
+    private var videoWidth = 0
+    private var videoHeight = 0
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val autoCollapseRunnable = Runnable { collapseOverlay() }
@@ -45,6 +51,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         binding.surfaceView.setOnTouchListener { _, event ->
             handleTouch(event)
             true
+        }
+        binding.root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (videoWidth > 0 && videoHeight > 0) {
+                applyLetterbox(videoWidth, videoHeight)
+            }
         }
 
         setupFloatOverlay()
@@ -69,10 +80,14 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             },
         )
 
-        val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
-        val port = intent.getIntExtra(EXTRA_PORT, 5555)
-        val maxSize = intent.getIntExtra(EXTRA_MAX_SIZE, 1280)
-        session = ScrcpySession(applicationContext, host, port, maxSize, this)
+        val config = SessionConfig(
+            host = intent.getStringExtra(EXTRA_HOST).orEmpty(),
+            port = intent.getIntExtra(EXTRA_PORT, 5555),
+            maxSize = intent.getIntExtra(EXTRA_MAX_SIZE, 1280),
+            newDisplay = intent.getStringExtra(EXTRA_NEW_DISPLAY),
+            startAppPackage = intent.getStringExtra(EXTRA_START_APP),
+        )
+        session = ScrcpySession(applicationContext, config, this)
 
         lifecycleScope.launch {
             session?.start()
@@ -128,7 +143,10 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     override fun onVideoSize(width: Int, height: Int) {
         runOnUiThread {
+            videoWidth = width
+            videoHeight = height
             binding.textMirrorStatus.text = "画面 ${width}x$height"
+            applyLetterbox(width, height)
         }
     }
 
@@ -140,6 +158,25 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             }
             if (!isFinishing) finish()
         }
+    }
+
+    private fun applyLetterbox(videoW: Int, videoH: Int) {
+        val containerW = binding.root.width
+        val containerH = binding.root.height
+        if (containerW <= 0 || containerH <= 0 || videoW <= 0 || videoH <= 0) return
+
+        val videoAspect = videoW.toFloat() / videoH.toFloat()
+        val viewAspect = containerW.toFloat() / containerH.toFloat()
+        val lp = binding.surfaceView.layoutParams as FrameLayout.LayoutParams
+        if (videoAspect > viewAspect) {
+            lp.width = containerW
+            lp.height = (containerW / videoAspect).toInt().coerceAtLeast(1)
+        } else {
+            lp.height = containerH
+            lp.width = (containerH * videoAspect).toInt().coerceAtLeast(1)
+        }
+        lp.gravity = Gravity.CENTER
+        binding.surfaceView.layoutParams = lp
     }
 
     private fun setupFloatOverlay() {
@@ -225,7 +262,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         val viewH = binding.surfaceView.height.toFloat()
         if (viewW <= 0f || viewH <= 0f) return false
 
-        // SurfaceView + MediaCodec 默认铺满整个 Surface，按拉伸映射坐标
+        // SurfaceView 已按视频比例 letterbox，区域内线性映射即可
         val x = (event.x / viewW * videoW).toInt().coerceIn(0, videoW - 1)
         val y = (event.y / viewH * videoH).toInt().coerceIn(0, videoH - 1)
 

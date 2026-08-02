@@ -69,6 +69,20 @@ class ControlMessageWriter(
         writeAsync(displayPowerBytes(on))
     }
 
+    /**
+     * 启动应用。包名前加 `+` 表示先 force-stop。
+     * 协议：1 字节 type + string_tiny（1 字节长度 + UTF-8）。
+     */
+    fun startApp(name: String) {
+        val utf8 = name.toByteArray(Charsets.UTF_8)
+        require(utf8.size in 1..255) { "startApp name length invalid: ${utf8.size}" }
+        val bytes = ByteArray(2 + utf8.size)
+        bytes[0] = ScrcpyConstants.MSG_START_APP.toByte()
+        bytes[1] = utf8.size.toByte()
+        System.arraycopy(utf8, 0, bytes, 2, utf8.size)
+        writeAsync(bytes)
+    }
+
     /** 断开前同步恢复亮屏，避免异步任务来不及发出 */
     fun setDisplayPowerSync(on: Boolean) {
         writeSync(displayPowerBytes(on))

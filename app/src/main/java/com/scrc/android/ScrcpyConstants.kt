@@ -14,6 +14,8 @@ object ScrcpyConstants {
     const val MSG_BACK_OR_SCREEN_ON = 4
     /** scrcpy TYPE_SET_DISPLAY_POWER：关闭物理屏背光，投屏仍继续 */
     const val MSG_SET_DISPLAY_POWER = 10
+    /** scrcpy TYPE_START_APP：在当前镜像 display 上启动应用 */
+    const val MSG_START_APP = 16
 
     const val ACTION_DOWN = 0
     const val ACTION_UP = 1

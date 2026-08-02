@@ -46,14 +46,28 @@ enum class ResolutionPreset(
          * with a small margin and even alignment for encoders.
          */
         fun adaptToLocalScreen(context: Context): Int {
-            val metrics = DisplayMetrics()
-            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            @Suppress("DEPRECATION")
-            wm.defaultDisplay.getRealMetrics(metrics)
+            val metrics = localMetrics(context)
             val longer = max(metrics.widthPixels, metrics.heightPixels)
             // Keep a bit of headroom for UI chrome; clamp to common range.
             val target = (longer * 0.95f).roundToInt().coerceIn(480, 2560)
             return target and 0x7FFFFFFE // even
+        }
+
+        /** 控制端物理分辨率与 DPI，用于独立应用模式的 virtual display。 */
+        fun localDisplaySpec(context: Context): String {
+            val metrics = localMetrics(context)
+            val width = (metrics.widthPixels and 0x7FFFFFFE).coerceAtLeast(2)
+            val height = (metrics.heightPixels and 0x7FFFFFFE).coerceAtLeast(2)
+            val dpi = metrics.densityDpi.coerceAtLeast(120)
+            return "${width}x${height}/$dpi"
+        }
+
+        private fun localMetrics(context: Context): DisplayMetrics {
+            val metrics = DisplayMetrics()
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealMetrics(metrics)
+            return metrics
         }
     }
 }

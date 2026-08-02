@@ -17,9 +17,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okio.BufferedSource
-import okio.buffer
-import okio.source
-import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -28,9 +25,7 @@ import kotlin.random.Random
 
 class ScrcpySession(
     private val context: Context,
-    private val host: String,
-    private val port: Int,
-    private val maxSize: Int,
+    private val config: SessionConfig,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -42,10 +37,13 @@ class ScrcpySession(
 
     companion object {
         private const val TAG = "ScrcpySession"
-        private const val PUSH_MODE = 420 // 0644
         /** 约 24.8 天，等价于连接期间不自动息屏 */
         private const val SCREEN_OFF_TIMEOUT_KEEP_AWAKE = "2147483647"
     }
+
+    private val host: String get() = config.host
+    private val port: Int get() = config.port
+    private val maxSize: Int get() = config.maxSize
 
     private val running = AtomicBoolean(false)
     private val decoder = VideoDecoder()
@@ -91,7 +89,7 @@ class ScrcpySession(
             dataDadb = createDadb(keyPair)
 
             listener.onStatus("正在推送 scrcpy-server …")
-            pushServer(dataDadb!!)
+            ScrcpyServerFiles.push(context, dataDadb!!)
 
             scid = Random.nextInt() and 0x7fffffff
             if (scid == 0) scid = 1
@@ -104,12 +102,14 @@ class ScrcpySession(
             }
             delay(150)
 
-            listener.onStatus("正在启动服务端 …")
+            listener.onStatus(
+                if (config.isAppMode) "正在启动独立应用虚拟屏 …" else "正在启动服务端 …",
+            )
             enableStayAwake(dataDadb!!)
             startServer(shellDadb!!)
 
-            // Wait until server log shows Device, or timeout
-            waitForServerReady(timeoutMs = 8_000)
+            // 虚拟屏创建可能更慢一些
+            waitForServerReady(timeoutMs = if (config.isAppMode) 12_000 else 8_000)
 
             // tunnel_forward 协议顺序（与官方 client 一致）：
             // 1) 先连 video  2) 再连 control（server 在 accept 完全部 socket 前不会 sendDeviceMeta）
@@ -151,8 +151,17 @@ class ScrcpySession(
             if (codecId == 1) throw IOException("视频配置错误")
             decoder.setCodecId(codecId)
 
+            // 官方 client 在建连后通过控制通道启动应用
+            val pkg = config.startAppPackage?.trim().orEmpty()
+            if (pkg.isNotEmpty()) {
+                listener.onStatus("正在启动应用 $pkg …")
+                controlWriter?.startApp("+$pkg")
+            }
+
             listener.onConnected(deviceName.ifEmpty { host })
-            listener.onStatus("投屏中：$deviceName")
+            listener.onStatus(
+                if (pkg.isNotEmpty()) "独立应用：$pkg" else "投屏中：$deviceName",
+            )
 
             videoJob = sessionScope.launch {
                 demuxVideo(videoSource)
@@ -262,16 +271,6 @@ class ScrcpySession(
         }
     }
 
-    private fun pushServer(dadb: Dadb) {
-        val tmp = File(context.cacheDir, ScrcpyConstants.SERVER_ASSET)
-        context.assets.open(ScrcpyConstants.SERVER_ASSET).use { input ->
-            tmp.outputStream().use { output -> input.copyTo(output) }
-        }
-        tmp.source().buffer().use { source ->
-            dadb.push(source, ScrcpyConstants.SERVER_REMOTE_PATH, PUSH_MODE, System.currentTimeMillis())
-        }
-    }
-
     private fun startServer(dadb: Dadb) {
         val cmd = buildString {
             append("CLASSPATH=${ScrcpyConstants.SERVER_REMOTE_PATH} app_process / ")
@@ -286,6 +285,12 @@ class ScrcpySession(
             append("video_bit_rate=8000000")
             if (maxSize > 0) {
                 append(" max_size=$maxSize")
+            }
+            val newDisplay = config.newDisplay?.trim().orEmpty()
+            if (newDisplay.isNotEmpty()) {
+                // 虚拟屏尺寸对齐控制端，避免折叠屏主屏比例被拉伸
+                append(" new_display=$newDisplay")
+                append(" keep_active=true")
             }
         }
         Log.i(TAG, "start server: $cmd")
