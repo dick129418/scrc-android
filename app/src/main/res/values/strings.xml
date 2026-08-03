@@ -31,6 +31,11 @@
     <string name="action_input_enter">回车</string>
     <string name="action_input_del">退格</string>
     <string name="action_input_close">关闭</string>
+    <string name="mod_ctrl">Ctrl</string>
+    <string name="mod_alt">Alt</string>
+    <string name="mod_shift">Shift</string>
+    <string name="mod_win">Win</string>
+    <string name="mod_status_fmt">组合键：%1$s</string>
     <string name="action_connect">连接并投屏</string>
     <string name="action_scan">扫描局域网设备</string>
     <string name="action_scan_cancel">取消扫描</string>

@@ -52,9 +52,9 @@ class ControlMessageWriter(
         writeAsync(buf.array())
     }
 
-    fun injectKeyClick(keycode: Int) {
-        injectKeycode(keycode, ScrcpyConstants.ACTION_DOWN)
-        injectKeycode(keycode, ScrcpyConstants.ACTION_UP)
+    fun injectKeyClick(keycode: Int, metastate: Int = 0) {
+        injectKeycode(keycode, ScrcpyConstants.ACTION_DOWN, metastate = metastate)
+        injectKeycode(keycode, ScrcpyConstants.ACTION_UP, metastate = metastate)
     }
 
     /** 注入文本（UTF-8），仅可靠支持 ASCII；中文等请用 setClipboard(paste=true)。 */

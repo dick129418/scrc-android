@@ -7,6 +7,7 @@ import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
@@ -15,9 +16,11 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import com.scrc.android.databinding.ActivityMirrorBinding
@@ -41,6 +44,10 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private var controlReady = false
     private var overlayExpanded = true
     private var keyboardOpen = false
+    private var modCtrl = false
+    private var modAlt = false
+    private var modShift = false
+    private var modWin = false
     private var videoWidth = 0
     private var videoHeight = 0
     private var suppressInputSync = false
@@ -231,21 +238,85 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         binding.inputRemote.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND || actionId == EditorInfo.IME_ACTION_DONE) {
                 flushLocalInput()
-                session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_ENTER)
+                injectKeyWithMods(KeyEvent.KEYCODE_ENTER)
                 true
             } else {
                 false
             }
         }
+        bindModToggle(binding.btnModCtrl) { modCtrl = it }
+        bindModToggle(binding.btnModAlt) { modAlt = it }
+        bindModToggle(binding.btnModShift) { modShift = it }
+        bindModToggle(binding.btnModWin) { modWin = it }
         binding.btnInputDel.setOnClickListener {
             flushLocalInput()
-            session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_DEL)
+            injectKeyWithMods(KeyEvent.KEYCODE_DEL)
         }
         binding.btnInputEnter.setOnClickListener {
             flushLocalInput()
-            session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_ENTER)
+            injectKeyWithMods(KeyEvent.KEYCODE_ENTER)
         }
         binding.btnInputClose.setOnClickListener { hideKeyboardPanel() }
+        refreshModUi()
+    }
+
+    private fun bindModToggle(btn: TextView, set: (Boolean) -> Unit) {
+        btn.setOnClickListener {
+            val next = btn.tag != true
+            btn.tag = next
+            set(next)
+            refreshModUi()
+        }
+    }
+
+    private fun metaState(): Int {
+        var m = 0
+        if (modShift) m = m or KeyEvent.META_SHIFT_ON
+        if (modAlt) m = m or KeyEvent.META_ALT_ON
+        if (modCtrl) m = m or KeyEvent.META_CTRL_ON
+        if (modWin) m = m or KeyEvent.META_META_ON
+        return m
+    }
+
+    private fun refreshModUi() {
+        styleMod(binding.btnModCtrl, modCtrl)
+        styleMod(binding.btnModAlt, modAlt)
+        styleMod(binding.btnModShift, modShift)
+        styleMod(binding.btnModWin, modWin)
+        val parts = buildList {
+            if (modCtrl) add("Ctrl")
+            if (modAlt) add("Alt")
+            if (modShift) add("Shift")
+            if (modWin) add("Win")
+        }
+        if (parts.isEmpty()) {
+            binding.textModStatus.visibility = View.GONE
+        } else {
+            binding.textModStatus.visibility = View.VISIBLE
+            binding.textModStatus.text = getString(R.string.mod_status_fmt, parts.joinToString(" + "))
+        }
+    }
+
+    private fun styleMod(btn: TextView, on: Boolean) {
+        btn.tag = on
+        btn.setTextColor(
+            ContextCompat.getColor(this, if (on) R.color.accent else R.color.white),
+        )
+    }
+
+    private fun clearModifiers() {
+        modCtrl = false
+        modAlt = false
+        modShift = false
+        modWin = false
+        refreshModUi()
+    }
+
+    /** 带粘滞修饰键注入；发完非修饰键后自动清空（便于 Ctrl+Shift+R）。 */
+    private fun injectKeyWithMods(keycode: Int) {
+        val meta = metaState()
+        session?.control()?.injectKeyClick(keycode, meta)
+        if (meta != 0) clearModifiers()
     }
 
     private fun showKeyboardPanel() {
@@ -266,6 +337,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         keyboardOpen = false
         mainHandler.removeCallbacks(syncInputRunnable)
         flushLocalInput()
+        clearModifiers()
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(binding.inputRemote.windowToken, 0)
         binding.panelKeyboard.visibility = View.GONE
@@ -280,7 +352,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     /**
      * 把本地已提交文字推到被控端后清空本地缓冲。
-     * ASCII → injectText；中文等 → 剪贴板粘贴（injectText 不支持 Unicode）。
+     * 有修饰键时按键码注入（Ctrl+Shift+R）；否则 ASCII→injectText，中文→剪贴板粘贴。
      */
     private fun flushLocalInput() {
         if (suppressInputSync) return
@@ -291,8 +363,29 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         }
         val text = editable.toString()
         if (text.isEmpty()) return
-        session?.control()?.injectOrPaste(text)
+        val control = session?.control() ?: return
+        val meta = metaState()
+        if (meta != 0) {
+            for (ch in text) {
+                val code = charToKeycode(ch)
+                if (code != null) control.injectKeyClick(code, meta)
+                else control.injectOrPaste(ch.toString())
+            }
+            clearModifiers()
+        } else {
+            control.injectOrPaste(text)
+        }
         clearLocalInput()
+    }
+
+    private fun charToKeycode(ch: Char): Int? = when (ch) {
+        in 'a'..'z' -> KeyEvent.KEYCODE_A + (ch - 'a')
+        in 'A'..'Z' -> KeyEvent.KEYCODE_A + (ch - 'A')
+        in '0'..'9' -> KeyEvent.KEYCODE_0 + (ch - '0')
+        ' ' -> KeyEvent.KEYCODE_SPACE
+        '\n' -> KeyEvent.KEYCODE_ENTER
+        '\t' -> KeyEvent.KEYCODE_TAB
+        else -> null
     }
 
     private fun scheduleAutoCollapse() {
