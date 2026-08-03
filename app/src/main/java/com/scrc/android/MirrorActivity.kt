@@ -128,7 +128,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
         val port = intent.getIntExtra(EXTRA_PORT, 5555)
         if (host.isNotEmpty()) {
-            ConnectionHistoryStore.from(this).remember(host, port, deviceName)
+            ConnectionHistoryStore.from(this).remember(host, port, deviceName, incrementLaunch = false)
         }
         runOnUiThread {
             binding.textMirrorStatus.text = "已连接：$deviceName"

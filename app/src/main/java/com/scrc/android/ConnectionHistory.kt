@@ -5,12 +5,15 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.Collator
+import java.util.Locale
 
 data class HistoryEntry(
     val host: String,
     val port: Int,
     val lastUsedAt: Long,
     val deviceName: String? = null,
+    val launchCount: Int = 0,
 ) {
     val address: String get() = "$host:$port"
 }
@@ -32,24 +35,29 @@ class ConnectionHistoryStore(private val prefs: SharedPreferences) {
                             port = port,
                             lastUsedAt = obj.optLong("lastUsedAt", 0L),
                             deviceName = obj.optString("deviceName").takeIf { it.isNotBlank() },
+                            launchCount = obj.optInt("launchCount", 0).coerceAtLeast(0),
                         ),
                     )
                 }
-            }.sortedByDescending { it.lastUsedAt }
+            }.sortedWith(ENTRY_ORDER)
         } catch (_: Exception) {
             emptyList()
         }
     }
 
-    fun remember(host: String, port: Int, deviceName: String? = null) {
+    fun remember(
+        host: String,
+        port: Int,
+        deviceName: String? = null,
+        incrementLaunch: Boolean = true,
+    ) {
         val normalizedHost = host.trim()
         if (normalizedHost.isEmpty() || port !in 1..65535) return
 
         val now = System.currentTimeMillis()
         val existing = load().toMutableList()
         val index = existing.indexOfFirst { it.host == normalizedHost && it.port == port }
-        val previousName = if (index >= 0) existing[index].deviceName else null
-        if (index >= 0) existing.removeAt(index)
+        val previous = if (index >= 0) existing.removeAt(index) else null
 
         existing.add(
             0,
@@ -57,7 +65,8 @@ class ConnectionHistoryStore(private val prefs: SharedPreferences) {
                 host = normalizedHost,
                 port = port,
                 lastUsedAt = now,
-                deviceName = deviceName?.takeIf { it.isNotBlank() } ?: previousName,
+                deviceName = deviceName?.takeIf { it.isNotBlank() } ?: previous?.deviceName,
+                launchCount = (previous?.launchCount ?: 0) + if (incrementLaunch) 1 else 0,
             ),
         )
 
@@ -76,6 +85,7 @@ class ConnectionHistoryStore(private val prefs: SharedPreferences) {
                     put("host", entry.host)
                     put("port", entry.port)
                     put("lastUsedAt", entry.lastUsedAt)
+                    put("launchCount", entry.launchCount)
                     if (!entry.deviceName.isNullOrBlank()) {
                         put("deviceName", entry.deviceName)
                     }
@@ -88,6 +98,13 @@ class ConnectionHistoryStore(private val prefs: SharedPreferences) {
     companion object {
         private const val KEY_HISTORY = "connection_history"
         private const val MAX_ENTRIES = 20
+
+        private val NAME_COLLATOR = Collator.getInstance(Locale.CHINA).apply {
+            strength = Collator.PRIMARY
+        }
+
+        private val ENTRY_ORDER = compareByDescending<HistoryEntry> { it.launchCount }
+            .thenBy { NAME_COLLATOR.getCollationKey(it.deviceName ?: it.host) }
 
         fun from(context: Context): ConnectionHistoryStore {
             return ConnectionHistoryStore(
