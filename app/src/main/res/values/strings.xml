@@ -27,6 +27,10 @@
     <string name="hint_power_save">关闭被控手机物理屏幕背光，投屏与触控仍可用</string>
     <string name="cd_float_dot">展开投屏控制</string>
     <string name="action_disconnect">断开</string>
+    <string name="action_keyboard">键盘</string>
+    <string name="action_input_enter">回车</string>
+    <string name="action_input_del">退格</string>
+    <string name="action_input_close">关闭</string>
     <string name="action_connect">连接并投屏</string>
     <string name="action_scan">扫描局域网设备</string>
     <string name="action_scan_cancel">取消扫描</string>

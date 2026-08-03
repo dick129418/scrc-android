@@ -10,8 +10,10 @@ object ScrcpyConstants {
     const val CODEC_H265 = 0x68323635 // "h265"
 
     const val MSG_INJECT_KEYCODE = 0
+    const val MSG_INJECT_TEXT = 1
     const val MSG_INJECT_TOUCH_EVENT = 2
     const val MSG_BACK_OR_SCREEN_ON = 4
+    const val MSG_SET_CLIPBOARD = 9
     /** scrcpy TYPE_SET_DISPLAY_POWER：关闭物理屏背光，投屏仍继续 */
     const val MSG_SET_DISPLAY_POWER = 10
     /** scrcpy TYPE_START_APP：在当前镜像 display 上启动应用 */
@@ -23,6 +25,11 @@ object ScrcpyConstants {
 
     const val KEYCODE_HOME = 3
     const val KEYCODE_BACK = 4
+    const val KEYCODE_ENTER = 66
+    const val KEYCODE_DEL = 67
+
+    /** scrcpy SC_CONTROL_MSG_INJECT_TEXT_MAX_LENGTH */
+    const val INJECT_TEXT_MAX_LENGTH = 300
 
     /** scrcpy SC_POINTER_ID_GENERIC_FINGER */
     const val POINTER_ID_FINGER = -2L

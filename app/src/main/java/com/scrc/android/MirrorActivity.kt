@@ -1,14 +1,19 @@
 package com.scrc.android
 
+import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -35,11 +40,15 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private var session: ScrcpySession? = null
     private var controlReady = false
     private var overlayExpanded = true
+    private var keyboardOpen = false
     private var videoWidth = 0
     private var videoHeight = 0
+    private var suppressInputSync = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val autoCollapseRunnable = Runnable { collapseOverlay() }
+    /** 等中文组字结束后再注入（组字结束时不一定再触发 TextWatcher） */
+    private val syncInputRunnable = Runnable { flushLocalInput() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +71,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         }
 
         setupFloatOverlay()
+        setupKeyboardPanel()
 
         val preferPowerSave = intent.getBooleanExtra(EXTRA_POWER_SAVE, false)
         binding.switchPowerSave.isChecked = preferPowerSave
@@ -72,6 +82,9 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
                 applyDisplayPower(blackout = checked)
             }
         }
+        binding.btnKeyboard.setOnClickListener {
+            if (keyboardOpen) hideKeyboardPanel() else showKeyboardPanel()
+        }
         binding.btnDisconnect.setOnClickListener {
             mainHandler.removeCallbacks(autoCollapseRunnable)
             session?.stop()
@@ -79,12 +92,16 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             finish()
         }
 
-        // 系统返回键注入到被控端；再按一次系统返回可退出本页（由用户从最近任务划掉亦可）
+        // 系统返回键：键盘开着则先关键盘，否则注入被控端返回
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_BACK)
+                    if (keyboardOpen) {
+                        hideKeyboardPanel()
+                    } else {
+                        session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_BACK)
+                    }
                 }
             },
         )
@@ -106,6 +123,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(autoCollapseRunnable)
+        mainHandler.removeCallbacks(syncInputRunnable)
         session?.stop()
         session = null
         super.onDestroy()
@@ -200,9 +218,86 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         )
     }
 
+    private fun setupKeyboardPanel() {
+        binding.inputRemote.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressInputSync) return
+                mainHandler.removeCallbacks(syncInputRunnable)
+                mainHandler.post(syncInputRunnable)
+            }
+        })
+        binding.inputRemote.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND || actionId == EditorInfo.IME_ACTION_DONE) {
+                flushLocalInput()
+                session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_ENTER)
+                true
+            } else {
+                false
+            }
+        }
+        binding.btnInputDel.setOnClickListener {
+            flushLocalInput()
+            session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_DEL)
+        }
+        binding.btnInputEnter.setOnClickListener {
+            flushLocalInput()
+            session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_ENTER)
+        }
+        binding.btnInputClose.setOnClickListener { hideKeyboardPanel() }
+    }
+
+    private fun showKeyboardPanel() {
+        if (!controlReady) {
+            Toast.makeText(this, "尚未连接", Toast.LENGTH_SHORT).show()
+            return
+        }
+        keyboardOpen = true
+        mainHandler.removeCallbacks(autoCollapseRunnable)
+        collapseOverlay()
+        binding.panelKeyboard.visibility = View.VISIBLE
+        binding.inputRemote.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(binding.inputRemote, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideKeyboardPanel() {
+        keyboardOpen = false
+        mainHandler.removeCallbacks(syncInputRunnable)
+        flushLocalInput()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(binding.inputRemote.windowToken, 0)
+        binding.panelKeyboard.visibility = View.GONE
+        binding.surfaceView.requestFocus()
+    }
+
+    private fun clearLocalInput() {
+        suppressInputSync = true
+        binding.inputRemote.setText("")
+        suppressInputSync = false
+    }
+
+    /**
+     * 把本地已提交文字推到被控端后清空本地缓冲。
+     * ASCII → injectText；中文等 → 剪贴板粘贴（injectText 不支持 Unicode）。
+     */
+    private fun flushLocalInput() {
+        if (suppressInputSync) return
+        val editable = binding.inputRemote.text ?: return
+        if (android.view.inputmethod.BaseInputConnection.getComposingSpanStart(editable) >= 0) {
+            mainHandler.postDelayed(syncInputRunnable, 40)
+            return
+        }
+        val text = editable.toString()
+        if (text.isEmpty()) return
+        session?.control()?.injectOrPaste(text)
+        clearLocalInput()
+    }
+
     private fun scheduleAutoCollapse() {
         mainHandler.removeCallbacks(autoCollapseRunnable)
-        if (overlayExpanded) {
+        if (overlayExpanded && !keyboardOpen) {
             mainHandler.postDelayed(autoCollapseRunnable, AUTO_COLLAPSE_MS)
         }
     }
@@ -291,6 +386,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         try {
             s.control()?.injectTouch(action, x, y, videoW, videoH, pressure)
         } catch (_: Exception) {
+        }
+        if (keyboardOpen && action == ScrcpyConstants.ACTION_UP) {
+            binding.inputRemote.post {
+                binding.inputRemote.requestFocus()
+            }
         }
         return true
     }

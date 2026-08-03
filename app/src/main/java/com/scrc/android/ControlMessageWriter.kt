@@ -57,6 +57,54 @@ class ControlMessageWriter(
         injectKeycode(keycode, ScrcpyConstants.ACTION_UP)
     }
 
+    /** 注入文本（UTF-8），仅可靠支持 ASCII；中文等请用 setClipboard(paste=true)。 */
+    fun injectText(text: String) {
+        if (text.isEmpty()) return
+        var remain = text
+        while (remain.isNotEmpty()) {
+            var end = remain.length
+            var chunk = remain.toByteArray(Charsets.UTF_8)
+            while (chunk.size > ScrcpyConstants.INJECT_TEXT_MAX_LENGTH && end > 1) {
+                end--
+                chunk = remain.substring(0, end).toByteArray(Charsets.UTF_8)
+            }
+            val bytes = ByteArray(5 + chunk.size)
+            bytes[0] = ScrcpyConstants.MSG_INJECT_TEXT.toByte()
+            bytes[1] = (chunk.size ushr 24).toByte()
+            bytes[2] = (chunk.size ushr 16).toByte()
+            bytes[3] = (chunk.size ushr 8).toByte()
+            bytes[4] = chunk.size.toByte()
+            System.arraycopy(chunk, 0, bytes, 5, chunk.size)
+            writeAsync(bytes)
+            remain = remain.substring(end)
+        }
+    }
+
+    /**
+     * 设置被控端剪贴板；paste=true 时立刻粘贴到当前焦点（用于中文等非 ASCII）。
+     * 协议：type + sequence(u64) + paste(u8) + length(u32) + utf8
+     */
+    fun setClipboard(text: String, paste: Boolean = true) {
+        val utf8 = text.toByteArray(Charsets.UTF_8)
+        val bytes = ByteArray(14 + utf8.size)
+        bytes[0] = ScrcpyConstants.MSG_SET_CLIPBOARD.toByte()
+        // sequence = 0（不需要 ACK）
+        bytes[9] = if (paste) 1 else 0
+        bytes[10] = (utf8.size ushr 24).toByte()
+        bytes[11] = (utf8.size ushr 16).toByte()
+        bytes[12] = (utf8.size ushr 8).toByte()
+        bytes[13] = utf8.size.toByte()
+        System.arraycopy(utf8, 0, bytes, 14, utf8.size)
+        writeAsync(bytes)
+    }
+
+    /** ASCII 用按键注入，其余用剪贴板粘贴。 */
+    fun injectOrPaste(text: String) {
+        if (text.isEmpty()) return
+        if (text.any { it.code > 0x7f }) setClipboard(text, paste = true)
+        else injectText(text)
+    }
+
     fun backOrScreenOn(action: Int) {
         writeAsync(byteArrayOf(ScrcpyConstants.MSG_BACK_OR_SCREEN_ON.toByte(), action.toByte()))
     }

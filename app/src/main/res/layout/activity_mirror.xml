@@ -10,6 +10,21 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <!-- 隐形输入：只用来拉起本地软键盘，不遮挡画面 -->
+    <EditText
+        android:id="@+id/inputRemote"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:layout_gravity="bottom|start"
+        android:background="@android:color/transparent"
+        android:cursorVisible="false"
+        android:imeOptions="actionSend|flagNoExtractUi"
+        android:importantForAutofill="no"
+        android:inputType="text|textNoSuggestions"
+        android:maxLines="1"
+        android:textColor="@android:color/transparent"
+        android:textSize="1sp" />
+
     <!-- 可拖动浮层：展开为面板，空闲后收成小点 -->
     <FrameLayout
         android:id="@+id/floatOverlay"
@@ -48,10 +63,22 @@
                 android:textSize="13sp" />
 
             <TextView
-                android:id="@+id/btnDisconnect"
+                android:id="@+id/btnKeyboard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center"
+                android:paddingVertical="8dp"
+                android:text="@string/action_keyboard"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnDisconnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
                 android:background="?attr/selectableItemBackground"
                 android:gravity="center"
                 android:paddingVertical="8dp"
@@ -68,4 +95,50 @@
             android:contentDescription="@string/label_power_save"
             android:visibility="gone" />
     </FrameLayout>
+
+    <!-- 键盘模式下的精简操作条（不挡打字预览，远程画面即反馈） -->
+    <LinearLayout
+        android:id="@+id/panelKeyboard"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_float_panel"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/btnInputDel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
+            android:text="@string/action_input_del"
+            android:textColor="@color/white"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnInputEnter"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
+            android:text="@string/action_input_enter"
+            android:textColor="@color/white"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnInputClose"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
+            android:text="@string/action_input_close"
+            android:textColor="@color/accent"
+            android:textSize="13sp" />
+    </LinearLayout>
 </FrameLayout>
