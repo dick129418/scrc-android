@@ -133,11 +133,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startOtgMirror() {
-        if (otgJob?.isActive == true) return
-        if (appMode) {
-            Toast.makeText(this, R.string.otg_mirror_app_unsupported, Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (otgJob?.isActive == true || appListJob?.isActive == true) return
         val custom = binding.inputMaxSize.text?.toString()?.toIntOrNull()
         if (selectedPreset == ResolutionPreset.CUSTOM && (custom == null || custom <= 0)) {
             Toast.makeText(this, "请输入有效的自定义最大边长", Toast.LENGTH_SHORT).show()
@@ -155,11 +151,12 @@ class MainActivity : AppCompatActivity() {
                     ?: throw IllegalStateException("未找到 ADB 设备。请用 OTG 连接被控手机并开启 USB 调试")
                 binding.textStatus.text = "请允许 USB 权限…"
                 UsbAdb.ensurePermission(this@MainActivity, usb, found.first)
-                startMirror(
-                    SessionConfig(maxSize = maxSize, usb = true),
-                    powerSave,
-                )
-                binding.textStatus.text = getString(R.string.status_idle)
+                if (appMode) {
+                    loadAppsAndPick(maxSize = maxSize, powerSave = powerSave, usb = true)
+                } else {
+                    startMirror(SessionConfig(maxSize = maxSize, usb = true), powerSave)
+                    binding.textStatus.text = getString(R.string.status_idle)
+                }
             } catch (e: Exception) {
                 val msg = e.message ?: e.javaClass.simpleName
                 binding.textStatus.text = getString(R.string.otg_failed, msg)
@@ -202,7 +199,7 @@ class MainActivity : AppCompatActivity() {
         renderHistory()
 
         if (appMode) {
-            loadAppsAndPick(host, port, maxSize, powerSave)
+            loadAppsAndPick(host = host, port = port, maxSize = maxSize, powerSave = powerSave)
         } else {
             binding.textStatus.text = getString(
                 R.string.status_connecting_fmt,
@@ -216,15 +213,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadAppsAndPick(host: String, port: Int, maxSize: Int, powerSave: Boolean) {
+    private fun loadAppsAndPick(
+        maxSize: Int,
+        powerSave: Boolean,
+        host: String = "",
+        port: Int = 5555,
+        usb: Boolean = false,
+    ) {
         if (appListJob?.isActive == true) return
         binding.btnConnect.isEnabled = false
+        binding.btnOtgMirror.isEnabled = false
         binding.textStatus.text = getString(R.string.action_load_apps)
 
         appListJob = lifecycleScope.launch {
             try {
                 val apps = AppLaunchStore.from(this@MainActivity).sort(
-                    RemoteAppLister.listApps(applicationContext, host, port),
+                    if (usb) {
+                        RemoteAppLister.listAppsUsb(applicationContext)
+                    } else {
+                        RemoteAppLister.listApps(applicationContext, host, port)
+                    },
                 )
                 if (apps.isEmpty()) {
                     Toast.makeText(this@MainActivity, R.string.app_list_empty, Toast.LENGTH_SHORT).show()
@@ -247,6 +255,7 @@ class MainActivity : AppCompatActivity() {
                             maxSize = maxSize,
                             newDisplay = display,
                             startAppPackage = app.packageName,
+                            usb = usb,
                         ),
                         powerSave,
                     )
@@ -261,6 +270,7 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             } finally {
                 binding.btnConnect.isEnabled = true
+                binding.btnOtgMirror.isEnabled = true
                 appListJob = null
             }
         }

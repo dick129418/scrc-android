@@ -14,33 +14,38 @@ object RemoteAppLister {
     suspend fun listApps(context: Context, host: String, port: Int): List<DeviceApp> =
         withContext(Dispatchers.IO) {
             val keyPair = AdbKeyStore.getOrCreate(context)
-            val dadb = Dadb.create(host, port, keyPair, connectTimeout = 10_000, socketTimeout = 60_000)
-            try {
-                ScrcpyServerFiles.push(context, dadb)
-                // cleanup=false：list 模式若 cleanup=true 会删除 jar，影响后续投屏
-                val cmd = buildString {
-                    append("CLASSPATH=${ScrcpyConstants.SERVER_REMOTE_PATH} app_process / ")
-                    append("com.genymobile.scrcpy.Server ${ScrcpyConstants.SERVER_VERSION} ")
-                    append("list_apps=true cleanup=false")
-                }
-                Log.i(TAG, "list apps: $cmd")
-                val result = dadb.shell(cmd)
-                val text = result.allOutput
-                Log.i(TAG, "list apps output length=${text.length}")
-                val apps = parse(text)
-                if (apps.isEmpty()) {
-                    throw IllegalStateException(
-                        "未解析到应用列表。输出：${text.takeLast(240).replace('\n', ' ')}",
-                    )
-                }
-                sortByName(apps)
-            } finally {
-                try {
-                    dadb.close()
-                } catch (_: Exception) {
-                }
+            Dadb.create(host, port, keyPair, connectTimeout = 10_000, socketTimeout = 60_000).use { dadb ->
+                listApps(context, dadb)
             }
         }
+
+    suspend fun listAppsUsb(context: Context): List<DeviceApp> =
+        withContext(Dispatchers.IO) {
+            val keyPair = AdbKeyStore.getOrCreate(context)
+            UsbAdb.connectReady(context, keyPair).use { dadb ->
+                listApps(context, dadb)
+            }
+        }
+
+    private fun listApps(context: Context, dadb: Dadb): List<DeviceApp> {
+        ScrcpyServerFiles.push(context, dadb)
+        // cleanup=false：list 模式若 cleanup=true 会删除 jar，影响后续投屏
+        val cmd = buildString {
+            append("CLASSPATH=${ScrcpyConstants.SERVER_REMOTE_PATH} app_process / ")
+            append("com.genymobile.scrcpy.Server ${ScrcpyConstants.SERVER_VERSION} ")
+            append("list_apps=true cleanup=false")
+        }
+        Log.i(TAG, "list apps: $cmd")
+        val text = dadb.shell(cmd).allOutput
+        Log.i(TAG, "list apps output length=${text.length}")
+        val apps = parse(text)
+        if (apps.isEmpty()) {
+            throw IllegalStateException(
+                "未解析到应用列表。输出：${text.takeLast(240).replace('\n', ' ')}",
+            )
+        }
+        return sortByName(apps)
+    }
 
     fun sortByName(apps: List<DeviceApp>): List<DeviceApp> {
         val collator = Collator.getInstance(Locale.CHINA).apply {
