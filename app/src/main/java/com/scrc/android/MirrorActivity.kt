@@ -69,6 +69,12 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
                 applyDisplayPower(blackout = checked)
             }
         }
+        binding.btnDisconnect.setOnClickListener {
+            mainHandler.removeCallbacks(autoCollapseRunnable)
+            session?.stop()
+            session = null
+            finish()
+        }
 
         // 系统返回键注入到被控端；再按一次系统返回可退出本页（由用户从最近任务划掉亦可）
         onBackPressedDispatcher.addCallback(

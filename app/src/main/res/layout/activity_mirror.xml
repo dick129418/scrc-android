@@ -46,6 +46,18 @@
                 android:text="@string/label_power_save"
                 android:textColor="@color/white"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnDisconnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center"
+                android:paddingVertical="8dp"
+                android:text="@string/action_disconnect"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
         </LinearLayout>
 
         <View

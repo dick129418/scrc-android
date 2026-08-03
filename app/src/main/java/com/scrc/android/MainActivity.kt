@@ -142,7 +142,9 @@ class MainActivity : AppCompatActivity() {
 
         appListJob = lifecycleScope.launch {
             try {
-                val apps = RemoteAppLister.listApps(applicationContext, host, port)
+                val apps = AppLaunchStore.from(this@MainActivity).sort(
+                    RemoteAppLister.listApps(applicationContext, host, port),
+                )
                 if (apps.isEmpty()) {
                     Toast.makeText(this@MainActivity, R.string.app_list_empty, Toast.LENGTH_SHORT).show()
                     binding.textStatus.text = getString(R.string.app_list_empty)
@@ -150,6 +152,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 binding.textStatus.text = getString(R.string.status_idle)
                 showAppPicker(apps) { app ->
+                    AppLaunchStore.from(this@MainActivity).remember(app.packageName)
                     val display = ResolutionPreset.localDisplaySpec(this@MainActivity)
                     binding.textStatus.text = getString(
                         R.string.status_connecting_fmt,
