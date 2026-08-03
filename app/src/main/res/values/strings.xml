@@ -40,11 +40,14 @@
     <string name="action_scan">扫描局域网设备</string>
     <string name="action_scan_cancel">取消扫描</string>
     <string name="action_otg_activate">OTG 首次激活</string>
-    <string name="hint_otg_activate">用 OTG 线连接被控手机，代替电脑执行 adb tcpip 5555</string>
+    <string name="action_otg_mirror">OTG 投屏</string>
+    <string name="hint_otg_activate">OTG 线连接被控手机：「首次激活」开无线 ADB；「OTG 投屏」直接 USB 镜像（暂仅整机）</string>
     <string name="otg_success">已开启无线 ADB（端口 %1$d）。请拔掉 OTG 线后连接投屏</string>
     <string name="otg_success_host">已开启无线 ADB：%1$s:%2$d。请拔掉 OTG 线后连接投屏</string>
     <string name="otg_failed">OTG 激活失败：%1$s</string>
     <string name="otg_busy">正在 OTG 激活…</string>
+    <string name="otg_mirror_busy">正在准备 OTG 投屏…</string>
+    <string name="otg_mirror_app_unsupported">OTG 投屏暂仅支持整机镜像，请切换到「整机镜像」</string>
     <string name="action_remove_history">删除历史</string>
     <string name="status_idle">输入被控手机的无线 ADB 地址后连接</string>
     <string name="help_text">被控手机需开启 USB 调试。可用「OTG 首次激活」代替电脑执行 adb tcpip，或手动开无线调试。\n两机同一 Wi‑Fi / 热点，首次连接时请在被控端点「允许 USB 调试」。</string>

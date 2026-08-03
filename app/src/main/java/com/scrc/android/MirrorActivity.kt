@@ -35,6 +35,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         const val EXTRA_POWER_SAVE = "power_save"
         const val EXTRA_NEW_DISPLAY = "new_display"
         const val EXTRA_START_APP = "start_app"
+        const val EXTRA_USB = "usb"
         private const val KEY_POWER_SAVE = "power_save"
         private const val AUTO_COLLAPSE_MS = 3_000L
     }
@@ -119,6 +120,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             maxSize = intent.getIntExtra(EXTRA_MAX_SIZE, 1280),
             newDisplay = intent.getStringExtra(EXTRA_NEW_DISPLAY),
             startAppPackage = intent.getStringExtra(EXTRA_START_APP),
+            usb = intent.getBooleanExtra(EXTRA_USB, false),
         )
         session = ScrcpySession(applicationContext, config, this)
 

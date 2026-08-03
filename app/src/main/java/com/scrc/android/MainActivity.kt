@@ -1,6 +1,7 @@
 package com.scrc.android
 
 import android.content.Intent
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -74,6 +75,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnConnect.setOnClickListener { connectCurrent() }
         binding.btnOtgActivate.setOnClickListener { startOtgActivate() }
+        binding.btnOtgMirror.setOnClickListener { startOtgMirror() }
         binding.btnScan.setOnClickListener {
             if (scanJob?.isActive == true) {
                 cancelScan()
@@ -99,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         if (otgJob?.isActive == true) return
         val port = binding.inputPort.text?.toString()?.toIntOrNull() ?: OtgAdbActivator.DEFAULT_PORT
         binding.btnOtgActivate.isEnabled = false
+        binding.btnOtgMirror.isEnabled = false
         binding.textStatus.text = getString(R.string.otg_busy)
         otgJob = lifecycleScope.launch {
             try {
@@ -123,6 +126,48 @@ class MainActivity : AppCompatActivity() {
                     .show()
             } finally {
                 binding.btnOtgActivate.isEnabled = true
+                binding.btnOtgMirror.isEnabled = true
+                otgJob = null
+            }
+        }
+    }
+
+    private fun startOtgMirror() {
+        if (otgJob?.isActive == true) return
+        if (appMode) {
+            Toast.makeText(this, R.string.otg_mirror_app_unsupported, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val custom = binding.inputMaxSize.text?.toString()?.toIntOrNull()
+        if (selectedPreset == ResolutionPreset.CUSTOM && (custom == null || custom <= 0)) {
+            Toast.makeText(this, "请输入有效的自定义最大边长", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val maxSize = selectedPreset.resolveMaxSize(this, custom)
+        val powerSave = binding.switchPowerSave.isChecked
+        binding.btnOtgActivate.isEnabled = false
+        binding.btnOtgMirror.isEnabled = false
+        binding.textStatus.text = getString(R.string.otg_mirror_busy)
+        otgJob = lifecycleScope.launch {
+            try {
+                val usb = getSystemService(USB_SERVICE) as UsbManager
+                val found = withContext(Dispatchers.IO) { UsbAdb.find(usb) }
+                    ?: throw IllegalStateException("未找到 ADB 设备。请用 OTG 连接被控手机并开启 USB 调试")
+                binding.textStatus.text = "请允许 USB 权限…"
+                UsbAdb.ensurePermission(this@MainActivity, usb, found.first)
+                startMirror(
+                    SessionConfig(maxSize = maxSize, usb = true),
+                    powerSave,
+                )
+                binding.textStatus.text = getString(R.string.status_idle)
+            } catch (e: Exception) {
+                val msg = e.message ?: e.javaClass.simpleName
+                binding.textStatus.text = getString(R.string.otg_failed, msg)
+                Toast.makeText(this@MainActivity, getString(R.string.otg_failed, msg), Toast.LENGTH_LONG)
+                    .show()
+            } finally {
+                binding.btnOtgActivate.isEnabled = true
+                binding.btnOtgMirror.isEnabled = true
                 otgJob = null
             }
         }
@@ -258,6 +303,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra(MirrorActivity.EXTRA_POWER_SAVE, powerSave)
                 putExtra(MirrorActivity.EXTRA_NEW_DISPLAY, config.newDisplay)
                 putExtra(MirrorActivity.EXTRA_START_APP, config.startAppPackage)
+                putExtra(MirrorActivity.EXTRA_USB, config.usb)
             },
         )
     }

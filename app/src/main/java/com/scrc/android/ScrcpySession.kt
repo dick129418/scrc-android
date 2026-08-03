@@ -82,11 +82,18 @@ class ScrcpySession(
         sessionScope = CoroutineScope(sessionJob + Dispatchers.IO)
         serverLog.set("")
         try {
-            listener.onStatus("正在连接 ADB $host:$port …")
             val keyPair = AdbKeyStore.getOrCreate(context)
-
-            shellDadb = createDadb(keyPair)
-            dataDadb = createDadb(keyPair)
+            if (config.usb) {
+                listener.onStatus("正在通过 OTG 连接 ADB …")
+                val usbDadb = UsbAdb.connectReady(context, keyPair)
+                // USB 只有一条 bulk 通道，shell 与 video 共用同一 Dadb（多路复用）
+                shellDadb = usbDadb
+                dataDadb = usbDadb
+            } else {
+                listener.onStatus("正在连接 ADB $host:$port …")
+                shellDadb = createDadb(keyPair)
+                dataDadb = createDadb(keyPair)
+            }
 
             listener.onStatus("正在推送 scrcpy-server …")
             ScrcpyServerFiles.push(context, dataDadb!!)
@@ -158,7 +165,12 @@ class ScrcpySession(
                 controlWriter?.startApp("+$pkg")
             }
 
-            listener.onConnected(deviceName.ifEmpty { host })
+            val label = when {
+                deviceName.isNotEmpty() -> deviceName
+                config.usb -> "USB"
+                else -> host
+            }
+            listener.onConnected(label)
             listener.onStatus(
                 if (pkg.isNotEmpty()) "独立应用：$pkg" else "投屏中：$deviceName",
             )
@@ -219,13 +231,16 @@ class ScrcpySession(
         shellStream = null
         // 先恢复息屏策略，再关 ADB
         restoreStayAwake(dataDadb)
+        val shared = dataDadb != null && dataDadb === shellDadb
         try {
             dataDadb?.close()
         } catch (_: Exception) {
         }
-        try {
-            shellDadb?.close()
-        } catch (_: Exception) {
+        if (!shared) {
+            try {
+                shellDadb?.close()
+            } catch (_: Exception) {
+            }
         }
         dataDadb = null
         shellDadb = null
