@@ -291,6 +291,8 @@ class ScrcpySession(
                 // 虚拟屏尺寸对齐控制端，避免折叠屏主屏比例被拉伸
                 append(" new_display=$newDisplay")
                 append(" keep_active=true")
+                // 默认 IME 会弹到物理主屏；local 才在虚拟屏弹出输入框
+                append(" display_ime_policy=local")
             }
         }
         Log.i(TAG, "start server: $cmd")
