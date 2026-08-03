@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private var selectedPreset: ResolutionPreset = ResolutionPreset.ADAPT
     private var scanJob: Job? = null
     private var appListJob: Job? = null
+    private var otgJob: Job? = null
     private var appMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,6 +73,7 @@ class MainActivity : AppCompatActivity() {
         renderHistory()
 
         binding.btnConnect.setOnClickListener { connectCurrent() }
+        binding.btnOtgActivate.setOnClickListener { startOtgActivate() }
         binding.btnScan.setOnClickListener {
             if (scanJob?.isActive == true) {
                 cancelScan()
@@ -89,7 +91,41 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         scanJob?.cancel()
         appListJob?.cancel()
+        otgJob?.cancel()
         super.onDestroy()
+    }
+
+    private fun startOtgActivate() {
+        if (otgJob?.isActive == true) return
+        val port = binding.inputPort.text?.toString()?.toIntOrNull() ?: OtgAdbActivator.DEFAULT_PORT
+        binding.btnOtgActivate.isEnabled = false
+        binding.textStatus.text = getString(R.string.otg_busy)
+        otgJob = lifecycleScope.launch {
+            try {
+                val result = OtgAdbActivator.activate(this@MainActivity, port) { status ->
+                    runOnUiThread { binding.textStatus.text = status }
+                }
+                binding.inputPort.setText(result.port.toString())
+                if (!result.host.isNullOrBlank()) {
+                    binding.inputHost.setText(result.host)
+                    historyStore.remember(result.host, result.port)
+                    renderHistory()
+                    binding.textStatus.text =
+                        getString(R.string.otg_success_host, result.host, result.port)
+                } else {
+                    binding.textStatus.text = getString(R.string.otg_success, result.port)
+                }
+                Toast.makeText(this@MainActivity, binding.textStatus.text, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                val msg = e.message ?: e.javaClass.simpleName
+                binding.textStatus.text = getString(R.string.otg_failed, msg)
+                Toast.makeText(this@MainActivity, getString(R.string.otg_failed, msg), Toast.LENGTH_LONG)
+                    .show()
+            } finally {
+                binding.btnOtgActivate.isEnabled = true
+                otgJob = null
+            }
+        }
     }
 
     private fun connectCurrent() {
