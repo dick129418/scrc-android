@@ -235,17 +235,18 @@ class ScrcpySession(
 
     /**
      * 连接期间保持被控端唤醒：
+     * - 先亮屏（若已灭）
      * - scrcpy stay_awake：充电时改 stay_on_while_plugged_in（服务端 cleanup 会还原）
-     * - 拉长 screen_off_timeout：无线未充电时官方 stay_awake 无效，需额外处理
+     * - 拉长 screen_off_timeout + svc power stayon：无线未充电时官方 stay_awake 无效
      */
     private fun enableStayAwake(dadb: Dadb) {
         try {
+            dadb.shell("input keyevent KEYCODE_WAKEUP")
             val old = dadb.shell("settings get system screen_off_timeout").output.trim()
             if (old.isNotEmpty() && old != "null" && old != SCREEN_OFF_TIMEOUT_KEEP_AWAKE) {
                 savedScreenOffTimeout = old
             }
             dadb.shell("settings put system screen_off_timeout $SCREEN_OFF_TIMEOUT_KEEP_AWAKE")
-            // 无线场景下进一步强制保持唤醒（断开时还原）
             dadb.shell("svc power stayon true")
             stayAwakeApplied = true
             Log.i(TAG, "stay awake enabled, previous screen_off_timeout=$old")
