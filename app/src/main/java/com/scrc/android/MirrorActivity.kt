@@ -38,9 +38,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         const val EXTRA_USB = "usb"
         private const val KEY_POWER_SAVE = "power_save"
         private const val AUTO_COLLAPSE_MS = 3_000L
+        private const val MAX_RECONNECT = 5
     }
 
     private lateinit var binding: ActivityMirrorBinding
+    private lateinit var sessionConfig: SessionConfig
     private var session: ScrcpySession? = null
     private var controlReady = false
     private var overlayExpanded = true
@@ -52,11 +54,14 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private var videoWidth = 0
     private var videoHeight = 0
     private var suppressInputSync = false
+    private var userStopping = false
+    private var reconnectAttempt = 0
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val autoCollapseRunnable = Runnable { collapseOverlay() }
     /** 等中文组字结束后再注入（组字结束时不一定再触发 TextWatcher） */
     private val syncInputRunnable = Runnable { flushLocalInput() }
+    private val reconnectRunnable = Runnable { startSession() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,7 +99,9 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             if (keyboardOpen) hideKeyboardPanel() else showKeyboardPanel()
         }
         binding.btnDisconnect.setOnClickListener {
+            userStopping = true
             mainHandler.removeCallbacks(autoCollapseRunnable)
+            mainHandler.removeCallbacks(reconnectRunnable)
             session?.stop()
             session = null
             finish()
@@ -114,7 +121,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             },
         )
 
-        val config = SessionConfig(
+        sessionConfig = SessionConfig(
             host = intent.getStringExtra(EXTRA_HOST).orEmpty(),
             port = intent.getIntExtra(EXTRA_PORT, 5555),
             maxSize = intent.getIntExtra(EXTRA_MAX_SIZE, 1280),
@@ -122,17 +129,24 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             startAppPackage = intent.getStringExtra(EXTRA_START_APP),
             usb = intent.getBooleanExtra(EXTRA_USB, false),
         )
-        session = ScrcpySession(applicationContext, config, this)
-
-        lifecycleScope.launch {
-            session?.start()
-        }
+        startSession()
         scheduleAutoCollapse()
     }
 
+    private fun startSession() {
+        if (userStopping || isFinishing) return
+        val s = ScrcpySession(applicationContext, sessionConfig, this)
+        session = s
+        val surface = binding.surfaceView.holder.surface
+        if (surface?.isValid == true) s.setSurface(surface)
+        lifecycleScope.launch { s.start() }
+    }
+
     override fun onDestroy() {
+        userStopping = true
         mainHandler.removeCallbacks(autoCollapseRunnable)
         mainHandler.removeCallbacks(syncInputRunnable)
+        mainHandler.removeCallbacks(reconnectRunnable)
         session?.stop()
         session = null
         super.onDestroy()
@@ -167,6 +181,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             ConnectionHistoryStore.from(this).remember(host, port, deviceName, incrementLaunch = false)
         }
         runOnUiThread {
+            reconnectAttempt = 0
             binding.textMirrorStatus.text = "已连接：$deviceName"
             Toast.makeText(this, "已连接 $deviceName", Toast.LENGTH_SHORT).show()
             controlReady = true
@@ -189,10 +204,22 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     override fun onDisconnected(error: String?) {
         runOnUiThread {
             controlReady = false
-            if (error != null) {
-                Toast.makeText(this, "断开：$error", Toast.LENGTH_LONG).show()
+            session = null
+            if (userStopping || isFinishing || error == null) {
+                if (!isFinishing) finish()
+                return@runOnUiThread
             }
-            if (!isFinishing) finish()
+            if (reconnectAttempt >= MAX_RECONNECT) {
+                Toast.makeText(this, "重连失败：$error", Toast.LENGTH_LONG).show()
+                finish()
+                return@runOnUiThread
+            }
+            reconnectAttempt++
+            binding.textMirrorStatus.text =
+                "断链，正在重连 ($reconnectAttempt/$MAX_RECONNECT)…"
+            expandOverlay(resetTimer = true)
+            mainHandler.removeCallbacks(reconnectRunnable)
+            mainHandler.postDelayed(reconnectRunnable, 1000L * reconnectAttempt)
         }
     }
 
