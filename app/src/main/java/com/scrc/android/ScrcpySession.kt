@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.SystemClock
 import okio.BufferedSource
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -33,6 +34,7 @@ class ScrcpySession(
         fun onConnected(deviceName: String)
         fun onVideoSize(width: Int, height: Int)
         fun onDisconnected(error: String?)
+        fun onRemoteClipboard(text: String) {}
     }
 
     companion object {
@@ -57,6 +59,7 @@ class ScrcpySession(
     private var controlStream: AdbStream? = null
     private var controlWriter: ControlMessageWriter? = null
     private var videoJob: Job? = null
+    private var controlJob: Job? = null
     private var shellDrainJob: Job? = null
     private var sessionJob: Job = SupervisorJob()
     private var sessionScope = CoroutineScope(sessionJob + Dispatchers.IO)
@@ -75,6 +78,8 @@ class ScrcpySession(
     fun getVideoHeight(): Int = decoder.getHeight()
 
     fun control(): ControlMessageWriter? = controlWriter
+
+    fun snapshotStats(): Pair<Int, Int> = decoder.snapshotStats()
 
     suspend fun start() = withContext(Dispatchers.IO) {
         if (!running.compareAndSet(false, true)) return@withContext
@@ -130,15 +135,15 @@ class ScrcpySession(
             val control = openAbstractSocket(dataDadb!!, socketName, retries = 30)
             controlStream = control
             controlWriter = ControlMessageWriter(control.sink)
-            // Drain inbound device messages so the ADB control stream doesn't stall
-            sessionScope.launch {
+            controlJob = sessionScope.launch {
                 try {
-                    val src = control.source
-                    val buf = ByteArray(256)
-                    while (running.get()) {
-                        if (src.read(buf) < 0) break
+                    DeviceMessageReader(control.source) { text ->
+                        listener.onRemoteClipboard(text)
+                    }.readLoop { running.get() }
+                } catch (e: Exception) {
+                    if (running.get()) {
+                        Log.w(TAG, "control inbound ended: ${e.message}")
                     }
-                } catch (_: Exception) {
                 }
             }
 
@@ -204,6 +209,8 @@ class ScrcpySession(
         running.set(false)
         videoJob?.cancel()
         videoJob = null
+        controlJob?.cancel()
+        controlJob = null
         shellDrainJob?.cancel()
         shellDrainJob = null
         // 服务端 cleanup 也会恢复，这里主动亮屏更稳妥
@@ -407,7 +414,8 @@ class ScrcpySession(
                 val payload = source.readByteArray(size.toLong())
                 val config = (ptsAndFlags and (1L shl 62)) != 0L
                 val pts = ptsAndFlags and ((1L shl 61) - 1)
-                decoder.decode(payload, config, pts)
+                val arrival = SystemClock.elapsedRealtimeNanos()
+                decoder.decode(payload, config, pts, arrival)
             }
         } catch (e: Exception) {
             if (running.get()) {

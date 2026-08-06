@@ -1,11 +1,16 @@
 package com.scrc.android
 
+import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.Rational
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -39,11 +44,14 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         private const val KEY_POWER_SAVE = "power_save"
         private const val AUTO_COLLAPSE_MS = 3_000L
         private const val MAX_RECONNECT = 5
+        private const val STATS_INTERVAL_MS = 1_000L
     }
 
     private lateinit var binding: ActivityMirrorBinding
     private lateinit var sessionConfig: SessionConfig
     private var session: ScrcpySession? = null
+    private var clipboardBridge: ClipboardBridge? = null
+    private var gestureController: MirrorGestureController? = null
     private var controlReady = false
     private var overlayExpanded = true
     private var keyboardOpen = false
@@ -56,16 +64,22 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private var suppressInputSync = false
     private var userStopping = false
     private var reconnectAttempt = 0
+    private var statusBase = ""
+    private var inPip = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val autoCollapseRunnable = Runnable { collapseOverlay() }
-    /** 等中文组字结束后再注入（组字结束时不一定再触发 TextWatcher） */
     private val syncInputRunnable = Runnable { flushLocalInput() }
     private val reconnectRunnable = Runnable { startSession() }
+    private val statsRunnable = object : Runnable {
+        override fun run() {
+            refreshStatsLine()
+            mainHandler.postDelayed(this, STATS_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 投屏期间控制端不自动息屏
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityMirrorBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -73,8 +87,10 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         binding.surfaceView.holder.addCallback(this)
         binding.surfaceView.isClickable = true
         binding.surfaceView.isFocusable = true
+        gestureController = MirrorGestureController(binding.surfaceView) { handleTouch(it) }
         binding.surfaceView.setOnTouchListener { _, event ->
-            handleTouch(event)
+            if (inPip) return@setOnTouchListener true
+            gestureController?.onTouch(event) ?: handleTouch(event)
             true
         }
         binding.root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -85,15 +101,18 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
         setupFloatOverlay()
         setupKeyboardPanel()
+        setupPipButton()
+
+        clipboardBridge = ClipboardBridge(this) { text ->
+            session?.control()?.setClipboard(text, paste = false)
+        }
 
         val preferPowerSave = intent.getBooleanExtra(EXTRA_POWER_SAVE, false)
         binding.switchPowerSave.isChecked = preferPowerSave
         binding.switchPowerSave.setOnCheckedChangeListener { _, checked ->
             persistPowerSave(checked)
             scheduleAutoCollapse()
-            if (controlReady) {
-                applyDisplayPower(blackout = checked)
-            }
+            if (controlReady) applyDisplayPower(blackout = checked)
         }
         binding.btnKeyboard.setOnClickListener {
             if (keyboardOpen) hideKeyboardPanel() else showKeyboardPanel()
@@ -102,21 +121,19 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             userStopping = true
             mainHandler.removeCallbacks(autoCollapseRunnable)
             mainHandler.removeCallbacks(reconnectRunnable)
+            mainHandler.removeCallbacks(statsRunnable)
+            clipboardBridge?.stop()
             session?.stop()
             session = null
             finish()
         }
 
-        // 系统返回键：键盘开着则先关键盘，否则注入被控端返回
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (keyboardOpen) {
-                        hideKeyboardPanel()
-                    } else {
-                        session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_BACK)
-                    }
+                    if (keyboardOpen) hideKeyboardPanel()
+                    else session?.control()?.injectKeyClick(ScrcpyConstants.KEYCODE_BACK)
                 }
             },
         )
@@ -133,6 +150,61 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         scheduleAutoCollapse()
     }
 
+    private fun setupPipButton() {
+        val supported = packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        binding.btnPip.visibility = if (supported) View.VISIBLE else View.GONE
+        binding.btnPip.setOnClickListener {
+            enterPip()
+            scheduleAutoCollapse()
+        }
+    }
+
+    private fun enterPip() {
+        if (!controlReady || inPip) return
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        val w = videoWidth.coerceAtLeast(9)
+        val h = videoHeight.coerceAtLeast(16)
+        enterPictureInPictureMode(
+            PictureInPictureParams.Builder().setAspectRatio(Rational(w, h)).build(),
+        )
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (controlReady && !inPip) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip = isInPictureInPictureMode
+        if (isInPictureInPictureMode) {
+            if (keyboardOpen) hideKeyboardPanel()
+            binding.floatOverlay.visibility = View.GONE
+            clipboardBridge?.setPaused(true)
+        } else {
+            binding.floatOverlay.visibility = View.VISIBLE
+            clipboardBridge?.setPaused(false)
+            expandOverlay(resetTimer = true)
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (controlReady &&
+            !binding.inputRemote.isFocused &&
+            (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                session?.control()?.injectKeyClick(event.keyCode)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     private fun startSession() {
         if (userStopping || isFinishing) return
         val s = ScrcpySession(applicationContext, sessionConfig, this)
@@ -147,6 +219,9 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         mainHandler.removeCallbacks(autoCollapseRunnable)
         mainHandler.removeCallbacks(syncInputRunnable)
         mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.removeCallbacks(statsRunnable)
+        clipboardBridge?.stop()
+        clipboardBridge = null
         session?.stop()
         session = null
         super.onDestroy()
@@ -166,11 +241,9 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     override fun onStatus(message: String) {
         runOnUiThread {
+            statusBase = message
             binding.textMirrorStatus.text = message
-            // 连接过程中保持展开，方便看状态
-            if (!controlReady) {
-                expandOverlay(resetTimer = true)
-            }
+            if (!controlReady) expandOverlay(resetTimer = true)
         }
     }
 
@@ -182,12 +255,14 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         }
         runOnUiThread {
             reconnectAttempt = 0
-            binding.textMirrorStatus.text = "已连接：$deviceName"
+            statusBase = "已连接：$deviceName"
+            binding.textMirrorStatus.text = statusBase
             Toast.makeText(this, "已连接 $deviceName", Toast.LENGTH_SHORT).show()
             controlReady = true
-            if (binding.switchPowerSave.isChecked) {
-                applyDisplayPower(blackout = true)
-            }
+            clipboardBridge?.start()
+            mainHandler.removeCallbacks(statsRunnable)
+            mainHandler.post(statsRunnable)
+            if (binding.switchPowerSave.isChecked) applyDisplayPower(blackout = true)
             expandOverlay(resetTimer = true)
         }
     }
@@ -196,15 +271,29 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         runOnUiThread {
             videoWidth = width
             videoHeight = height
-            binding.textMirrorStatus.text = "画面 ${width}x$height"
+            statusBase = "画面 ${width}x$height"
+            binding.textMirrorStatus.text = statusBase
             applyLetterbox(width, height)
+            if (inPip && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                setPictureInPictureParams(
+                    PictureInPictureParams.Builder()
+                        .setAspectRatio(Rational(width.coerceAtLeast(9), height.coerceAtLeast(16)))
+                        .build(),
+                )
+            }
         }
+    }
+
+    override fun onRemoteClipboard(text: String) {
+        runOnUiThread { clipboardBridge?.onRemoteText(text) }
     }
 
     override fun onDisconnected(error: String?) {
         runOnUiThread {
             controlReady = false
             session = null
+            clipboardBridge?.stop()
+            mainHandler.removeCallbacks(statsRunnable)
             if (userStopping || isFinishing || error == null) {
                 if (!isFinishing) finish()
                 return@runOnUiThread
@@ -215,12 +304,20 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
                 return@runOnUiThread
             }
             reconnectAttempt++
-            binding.textMirrorStatus.text =
-                "断链，正在重连 ($reconnectAttempt/$MAX_RECONNECT)…"
+            statusBase = "断链，正在重连 ($reconnectAttempt/$MAX_RECONNECT)…"
+            binding.textMirrorStatus.text = statusBase
             expandOverlay(resetTimer = true)
             mainHandler.removeCallbacks(reconnectRunnable)
             mainHandler.postDelayed(reconnectRunnable, 1000L * reconnectAttempt)
         }
+    }
+
+    private fun refreshStatsLine() {
+        if (!controlReady || inPip) return
+        val s = session ?: return
+        val (fps, latencyMs) = s.snapshotStats()
+        val base = statusBase.ifBlank { "投屏中" }
+        binding.textMirrorStatus.text = getString(R.string.status_stats_fmt, base, fps, latencyMs)
     }
 
     private fun applyLetterbox(videoW: Int, videoH: Int) {
@@ -244,14 +341,8 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     private fun setupFloatOverlay() {
         binding.dotOverlay.contentDescription = getString(R.string.cd_float_dot)
-        // 仅状态文字可拖动，避免抢走省电开关的触摸
-        binding.textMirrorStatus.setOnTouchListener(
-            FloatDragTouchListener(expandOnTap = false),
-        )
-        // 小点：点击展开，拖动移位
-        binding.dotOverlay.setOnTouchListener(
-            FloatDragTouchListener(expandOnTap = true),
-        )
+        binding.textMirrorStatus.setOnTouchListener(FloatDragTouchListener(expandOnTap = false))
+        binding.dotOverlay.setOnTouchListener(FloatDragTouchListener(expandOnTap = true))
     }
 
     private fun setupKeyboardPanel() {
@@ -328,9 +419,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     private fun styleMod(btn: TextView, on: Boolean) {
         btn.tag = on
-        btn.setTextColor(
-            ContextCompat.getColor(this, if (on) R.color.accent else R.color.white),
-        )
+        btn.setTextColor(ContextCompat.getColor(this, if (on) R.color.accent else R.color.white))
     }
 
     private fun clearModifiers() {
@@ -341,7 +430,6 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         refreshModUi()
     }
 
-    /** 带粘滞修饰键注入；发完非修饰键后自动清空（便于 Ctrl+Shift+R）。 */
     private fun injectKeyWithMods(keycode: Int) {
         val meta = metaState()
         session?.control()?.injectKeyClick(keycode, meta)
@@ -379,10 +467,6 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         suppressInputSync = false
     }
 
-    /**
-     * 把本地已提交文字推到被控端后清空本地缓冲。
-     * 有修饰键时按键码注入（Ctrl+Shift+R）；否则 ASCII→injectText，中文→剪贴板粘贴。
-     */
     private fun flushLocalInput() {
         if (suppressInputSync) return
         val editable = binding.inputRemote.text ?: return
@@ -402,6 +486,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             }
             clearModifiers()
         } else {
+            clipboardBridge?.noteLocalText(text)
             control.injectOrPaste(text)
         }
         clearLocalInput()
@@ -419,12 +504,13 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
 
     private fun scheduleAutoCollapse() {
         mainHandler.removeCallbacks(autoCollapseRunnable)
-        if (overlayExpanded && !keyboardOpen) {
+        if (overlayExpanded && !keyboardOpen && !inPip) {
             mainHandler.postDelayed(autoCollapseRunnable, AUTO_COLLAPSE_MS)
         }
     }
 
     private fun expandOverlay(resetTimer: Boolean) {
+        if (inPip) return
         if (!overlayExpanded) {
             overlayExpanded = true
             binding.dotOverlay.visibility = View.GONE
@@ -457,9 +543,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     private fun clampOverlayTranslation(tx: Float, ty: Float): Pair<Float, Float> {
         val root = binding.root
         val float = binding.floatOverlay
-        if (root.width <= 0 || root.height <= 0 || float.width <= 0) {
-            return tx to ty
-        }
+        if (root.width <= 0 || root.height <= 0 || float.width <= 0) return tx to ty
         val maxTx = (root.width - float.left - float.width).toFloat().coerceAtLeast(0f)
         val maxTy = (root.height - float.top - float.height).toFloat().coerceAtLeast(0f)
         val minTx = -float.left.toFloat()
@@ -468,8 +552,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
     }
 
     private fun applyDisplayPower(blackout: Boolean) {
-        val control = session?.control() ?: return
-        control.setDisplayPower(!blackout)
+        session?.control()?.setDisplayPower(!blackout)
     }
 
     private fun persistPowerSave(enabled: Boolean) {
@@ -488,7 +571,6 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         val viewH = binding.surfaceView.height.toFloat()
         if (viewW <= 0f || viewH <= 0f) return false
 
-        // SurfaceView 已按视频比例 letterbox，区域内线性映射即可
         val x = (event.x / viewW * videoW).toInt().coerceIn(0, videoW - 1)
         val y = (event.y / viewH * videoH).toInt().coerceIn(0, videoH - 1)
 
@@ -510,16 +592,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         } catch (_: Exception) {
         }
         if (keyboardOpen && action == ScrcpyConstants.ACTION_UP) {
-            binding.inputRemote.post {
-                binding.inputRemote.requestFocus()
-            }
+            binding.inputRemote.post { binding.inputRemote.requestFocus() }
         }
         return true
     }
 
-    /**
-     * 拖动浮层；点击（未超过 touchSlop）时：小点展开，状态文字则刷新收起计时。
-     */
     private inner class FloatDragTouchListener(
         private val expandOnTap: Boolean,
     ) : View.OnTouchListener {
@@ -545,9 +622,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - downRawX
                     val dy = event.rawY - downRawY
-                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
-                        dragging = true
-                    }
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
                     if (dragging) {
                         val (tx, ty) = clampOverlayTranslation(downTransX + dx, downTransY + dy)
                         float.translationX = tx
@@ -557,11 +632,8 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
-                        if (expandOnTap) {
-                            expandOverlay(resetTimer = true)
-                        } else {
-                            scheduleAutoCollapse()
-                        }
+                        if (expandOnTap) expandOverlay(resetTimer = true)
+                        else scheduleAutoCollapse()
                     } else if (overlayExpanded) {
                         scheduleAutoCollapse()
                     }

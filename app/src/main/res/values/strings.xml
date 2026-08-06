@@ -28,6 +28,8 @@
     <string name="cd_float_dot">展开投屏控制</string>
     <string name="action_disconnect">断开</string>
     <string name="action_keyboard">键盘</string>
+    <string name="action_pip">画中画</string>
+    <string name="status_stats_fmt">%1$s · %2$dfps · %3$dms</string>
     <string name="action_input_enter">回车</string>
     <string name="action_input_del">退格</string>
     <string name="action_input_close">关闭</string>

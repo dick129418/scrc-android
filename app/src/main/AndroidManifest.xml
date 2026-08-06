@@ -37,9 +37,11 @@
 
         <activity
             android:name=".MirrorActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard|screenLayout|smallestScreenSize"
             android:exported="false"
+            android:resizeableActivity="true"
             android:screenOrientation="fullUser"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.ScrcpyAndroid.Fullscreen"
             android:windowSoftInputMode="adjustResize" />
     </application>

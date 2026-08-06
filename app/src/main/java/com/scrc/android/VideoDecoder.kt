@@ -2,14 +2,18 @@ package com.scrc.android
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class VideoDecoder {
     companion object {
         private const val TAG = "VideoDecoder"
         private const val TIMEOUT_US = 10_000L
+        private const val LATENCY_ALPHA = 0.2
     }
 
     private var codec: MediaCodec? = null
@@ -19,6 +23,10 @@ class VideoDecoder {
     private var surface: Surface? = null
     private val started = AtomicBoolean(false)
     private var pendingConfig: ByteArray? = null
+
+    private val renderedFrames = AtomicInteger(0)
+    private val arrivals = ArrayDeque<Long>()
+    @Volatile private var latencyEmaMs = 0.0
 
     @Synchronized
     fun setSurface(surface: Surface?) {
@@ -47,10 +55,18 @@ class VideoDecoder {
     fun getWidth(): Int = width
     fun getHeight(): Int = height
 
+    /** @return fps since last snapshot, ema latency ms */
+    fun snapshotStats(): Pair<Int, Int> {
+        val fps = renderedFrames.getAndSet(0)
+        return fps to latencyEmaMs.toInt()
+    }
+
     @Synchronized
-    fun decode(data: ByteArray, config: Boolean, ptsUs: Long) {
+    fun decode(data: ByteArray, config: Boolean, ptsUs: Long, arrivalNanos: Long = 0L) {
         if (config) {
             pendingConfig = data
+        } else if (arrivalNanos > 0L) {
+            synchronized(arrivals) { arrivals.addLast(arrivalNanos) }
         }
         val c = codec
         if (c == null || !started.get()) {
@@ -65,6 +81,9 @@ class VideoDecoder {
     fun release() {
         started.set(false)
         pendingConfig = null
+        synchronized(arrivals) { arrivals.clear() }
+        renderedFrames.set(0)
+        latencyEmaMs = 0.0
         releaseCodecOnly()
         surface = null
         width = 0
@@ -105,7 +124,22 @@ class VideoDecoder {
         while (true) {
             val outIndex = c.dequeueOutputBuffer(info, 0)
             when {
-                outIndex >= 0 -> c.releaseOutputBuffer(outIndex, true)
+                outIndex >= 0 -> {
+                    val render = info.size > 0
+                    if (render && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        renderedFrames.incrementAndGet()
+                        val arr = synchronized(arrivals) {
+                            if (arrivals.isEmpty()) 0L else arrivals.removeFirst()
+                        }
+                        if (arr > 0L) {
+                            val ms = (SystemClock.elapsedRealtimeNanos() - arr) / 1_000_000.0
+                            latencyEmaMs =
+                                if (latencyEmaMs <= 0.0) ms
+                                else latencyEmaMs * (1 - LATENCY_ALPHA) + ms * LATENCY_ALPHA
+                        }
+                    }
+                    c.releaseOutputBuffer(outIndex, render)
+                }
                 outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> break
                 outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ->
                     Log.d(TAG, "output format: ${c.outputFormat}")
