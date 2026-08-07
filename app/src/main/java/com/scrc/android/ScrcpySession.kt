@@ -305,17 +305,27 @@ class ScrcpySession(
             append("tunnel_forward=true ")
             append("cleanup=true ")
             append("stay_awake=true ")
-            append("video_bit_rate=8000000")
+            append("video_bit_rate=${config.videoBitRate.coerceAtLeast(100_000)} ")
+            if (config.videoCodec != VideoCodecOption.H264.serverValue) {
+                append("video_codec=${config.videoCodec} ")
+            }
+            if (config.maxFps > 0) {
+                append("max_fps=${config.maxFps} ")
+            }
+            if (config.lowLatencyEncode) {
+                // priority=0 → realtime；部分机型可进一步压编码缓冲
+                append("video_codec_options=priority:int=0 ")
+            }
             if (maxSize > 0) {
-                append(" max_size=$maxSize")
+                append("max_size=$maxSize ")
             }
             val newDisplay = config.newDisplay?.trim().orEmpty()
             if (newDisplay.isNotEmpty()) {
                 // 虚拟屏尺寸对齐控制端，避免折叠屏主屏比例被拉伸
-                append(" new_display=$newDisplay")
-                append(" keep_active=true")
+                append("new_display=$newDisplay ")
+                append("keep_active=true ")
                 // 默认 IME 会弹到物理主屏；local 才在虚拟屏弹出输入框
-                append(" display_ime_policy=local")
+                append("display_ime_policy=local")
             }
         }
         Log.i(TAG, "start server: $cmd")

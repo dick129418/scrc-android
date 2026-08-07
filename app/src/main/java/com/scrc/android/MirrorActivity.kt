@@ -41,6 +41,10 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         const val EXTRA_NEW_DISPLAY = "new_display"
         const val EXTRA_START_APP = "start_app"
         const val EXTRA_USB = "usb"
+        const val EXTRA_BIT_RATE = "bit_rate"
+        const val EXTRA_MAX_FPS = "max_fps"
+        const val EXTRA_VIDEO_CODEC = "video_codec"
+        const val EXTRA_LOW_LATENCY = "low_latency"
         private const val KEY_POWER_SAVE = "power_save"
         private const val AUTO_COLLAPSE_MS = 3_000L
         private const val MAX_RECONNECT = 5
@@ -145,6 +149,11 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             newDisplay = intent.getStringExtra(EXTRA_NEW_DISPLAY),
             startAppPackage = intent.getStringExtra(EXTRA_START_APP),
             usb = intent.getBooleanExtra(EXTRA_USB, false),
+            videoBitRate = intent.getIntExtra(EXTRA_BIT_RATE, 8_000_000),
+            maxFps = intent.getIntExtra(EXTRA_MAX_FPS, 0),
+            videoCodec = intent.getStringExtra(EXTRA_VIDEO_CODEC)
+                ?: VideoCodecOption.H264.serverValue,
+            lowLatencyEncode = intent.getBooleanExtra(EXTRA_LOW_LATENCY, false),
         )
         startSession()
         scheduleAutoCollapse()

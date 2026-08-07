@@ -29,6 +29,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var historyStore: ConnectionHistoryStore
     private var selectedPreset: ResolutionPreset = ResolutionPreset.ADAPT
+    private var selectedPerf: PerformancePreset = PerformancePreset.BALANCED
+    private var customBitRate = 8_000_000
+    private var customMaxFps = 0
+    private var customCodec = VideoCodecOption.H264
     private var scanJob: Job? = null
     private var appListJob: Job? = null
     private var otgJob: Job? = null
@@ -46,9 +50,18 @@ class MainActivity : AppCompatActivity() {
         binding.inputPort.setText(prefs.getString(KEY_PORT, "5555"))
         binding.inputMaxSize.setText(prefs.getString(KEY_CUSTOM_MAX, "1280"))
         binding.switchPowerSave.isChecked = prefs.getBoolean(KEY_POWER_SAVE, false)
+        binding.switchLowLatency.isChecked = prefs.getBoolean(KEY_LOW_LATENCY, false)
 
         val savedLabel = prefs.getString(KEY_PRESET, ResolutionPreset.ADAPT.label)
         selectedPreset = ResolutionPreset.fromLabel(savedLabel.orEmpty())
+        selectedPerf = PerformancePreset.fromLabel(
+            prefs.getString(KEY_PERF, PerformancePreset.BALANCED.label).orEmpty(),
+        )
+        customBitRate = BitRateChoices.nearest(prefs.getInt(KEY_BITRATE, 8_000_000))
+        customMaxFps = FpsChoices.nearest(prefs.getInt(KEY_MAX_FPS, 0))
+        customCodec = VideoCodecOption.fromServer(
+            prefs.getString(KEY_CODEC, VideoCodecOption.H264.serverValue).orEmpty(),
+        )
 
         appMode = prefs.getBoolean(KEY_APP_MODE, false)
         binding.toggleMode.check(if (appMode) R.id.modeApp else R.id.modeMirror)
@@ -71,6 +84,7 @@ class MainActivity : AppCompatActivity() {
             updateResolutionUi()
         }
         updateResolutionUi()
+        setupPerformanceUi()
         renderHistory()
 
         binding.btnConnect.setOnClickListener { connectCurrent() }
@@ -140,7 +154,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val maxSize = selectedPreset.resolveMaxSize(this, custom)
+        val video = currentVideoOptions()
         val powerSave = binding.switchPowerSave.isChecked
+        persistPrefs(host = null, port = null, customMax = custom, powerSave = powerSave)
         binding.btnOtgActivate.isEnabled = false
         binding.btnOtgMirror.isEnabled = false
         binding.textStatus.text = getString(R.string.otg_mirror_busy)
@@ -152,9 +168,19 @@ class MainActivity : AppCompatActivity() {
                 binding.textStatus.text = "请允许 USB 权限…"
                 UsbAdb.ensurePermission(this@MainActivity, usb, found.first)
                 if (appMode) {
-                    loadAppsAndPick(maxSize = maxSize, powerSave = powerSave, usb = true)
+                    loadAppsAndPick(maxSize = maxSize, video = video, powerSave = powerSave, usb = true)
                 } else {
-                    startMirror(SessionConfig(maxSize = maxSize, usb = true), powerSave)
+                    startMirror(
+                        SessionConfig(
+                            maxSize = maxSize,
+                            usb = true,
+                            videoBitRate = video.videoBitRate,
+                            maxFps = video.maxFps,
+                            videoCodec = video.videoCodec.serverValue,
+                            lowLatencyEncode = video.lowLatencyEncode,
+                        ),
+                        powerSave,
+                    )
                     binding.textStatus.text = getString(R.string.status_idle)
                 }
             } catch (e: Exception) {
@@ -185,29 +211,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         val maxSize = selectedPreset.resolveMaxSize(this, custom)
+        val video = currentVideoOptions()
         val powerSave = binding.switchPowerSave.isChecked
-        val prefs = getSharedPreferences(ConnectionHistoryStore.PREFS, MODE_PRIVATE)
-        prefs.edit {
-            putString(KEY_HOST, host)
-            putString(KEY_PORT, port.toString())
-            putString(KEY_PRESET, selectedPreset.label)
-            putString(KEY_CUSTOM_MAX, custom?.toString() ?: "1280")
-            putBoolean(KEY_POWER_SAVE, powerSave)
-            putBoolean(KEY_APP_MODE, appMode)
-        }
+        persistPrefs(host = host, port = port, customMax = custom, powerSave = powerSave)
         historyStore.remember(host, port)
         renderHistory()
 
         if (appMode) {
-            loadAppsAndPick(host = host, port = port, maxSize = maxSize, powerSave = powerSave)
+            loadAppsAndPick(
+                host = host,
+                port = port,
+                maxSize = maxSize,
+                video = video,
+                powerSave = powerSave,
+            )
         } else {
             binding.textStatus.text = getString(
                 R.string.status_connecting_fmt,
                 selectedPreset.label,
                 if (maxSize == 0) "原始" else maxSize.toString(),
+                video.summary(),
             )
             startMirror(
-                SessionConfig(host = host, port = port, maxSize = maxSize),
+                SessionConfig(
+                    host = host,
+                    port = port,
+                    maxSize = maxSize,
+                    videoBitRate = video.videoBitRate,
+                    maxFps = video.maxFps,
+                    videoCodec = video.videoCodec.serverValue,
+                    lowLatencyEncode = video.lowLatencyEncode,
+                ),
                 powerSave,
             )
         }
@@ -215,6 +249,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadAppsAndPick(
         maxSize: Int,
+        video: VideoOptions,
         powerSave: Boolean,
         host: String = "",
         port: Int = 5555,
@@ -247,6 +282,7 @@ class MainActivity : AppCompatActivity() {
                         R.string.status_connecting_fmt,
                         "${app.name} · $display",
                         if (maxSize == 0) "原始" else maxSize.toString(),
+                        video.summary(),
                     )
                     startMirror(
                         SessionConfig(
@@ -256,6 +292,10 @@ class MainActivity : AppCompatActivity() {
                             newDisplay = display,
                             startAppPackage = app.packageName,
                             usb = usb,
+                            videoBitRate = video.videoBitRate,
+                            maxFps = video.maxFps,
+                            videoCodec = video.videoCodec.serverValue,
+                            lowLatencyEncode = video.lowLatencyEncode,
                         ),
                         powerSave,
                     )
@@ -314,8 +354,96 @@ class MainActivity : AppCompatActivity() {
                 putExtra(MirrorActivity.EXTRA_NEW_DISPLAY, config.newDisplay)
                 putExtra(MirrorActivity.EXTRA_START_APP, config.startAppPackage)
                 putExtra(MirrorActivity.EXTRA_USB, config.usb)
+                putExtra(MirrorActivity.EXTRA_BIT_RATE, config.videoBitRate)
+                putExtra(MirrorActivity.EXTRA_MAX_FPS, config.maxFps)
+                putExtra(MirrorActivity.EXTRA_VIDEO_CODEC, config.videoCodec)
+                putExtra(MirrorActivity.EXTRA_LOW_LATENCY, config.lowLatencyEncode)
             },
         )
+    }
+
+    private fun currentVideoOptions(): VideoOptions = selectedPerf.toVideoOptions(
+        customBitRate = customBitRate,
+        customMaxFps = customMaxFps,
+        customCodec = customCodec,
+        customLowLatency = binding.switchLowLatency.isChecked,
+    )
+
+    private fun persistPrefs(host: String?, port: Int?, customMax: Int?, powerSave: Boolean) {
+        getSharedPreferences(ConnectionHistoryStore.PREFS, MODE_PRIVATE).edit {
+            if (host != null) putString(KEY_HOST, host)
+            if (port != null) putString(KEY_PORT, port.toString())
+            putString(KEY_PRESET, selectedPreset.label)
+            putString(KEY_CUSTOM_MAX, customMax?.toString() ?: "1280")
+            putBoolean(KEY_POWER_SAVE, powerSave)
+            putBoolean(KEY_APP_MODE, appMode)
+            putString(KEY_PERF, selectedPerf.label)
+            putInt(KEY_BITRATE, customBitRate)
+            putInt(KEY_MAX_FPS, customMaxFps)
+            putString(KEY_CODEC, customCodec.serverValue)
+            putBoolean(KEY_LOW_LATENCY, binding.switchLowLatency.isChecked)
+        }
+    }
+
+    private fun setupPerformanceUi() {
+        binding.inputPerformance.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, PerformancePreset.labels()),
+        )
+        binding.inputPerformance.setText(selectedPerf.label, false)
+        binding.inputPerformance.setOnItemClickListener { _, _, position, _ ->
+            selectedPerf = PerformancePreset.entries[position]
+            if (selectedPerf != PerformancePreset.CUSTOM) {
+                customBitRate = selectedPerf.videoBitRate
+                customMaxFps = selectedPerf.maxFps
+                customCodec = selectedPerf.videoCodec
+                binding.switchLowLatency.isChecked = selectedPerf.lowLatencyEncode
+                syncCustomDropdowns()
+            }
+            updatePerformanceUi()
+        }
+
+        binding.inputBitRate.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, BitRateChoices.labels()),
+        )
+        binding.inputMaxFps.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, FpsChoices.labels()),
+        )
+        binding.inputCodec.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, VideoCodecOption.labels()),
+        )
+        binding.inputBitRate.setOnItemClickListener { _, _, position, _ ->
+            customBitRate = BitRateChoices.VALUES[position]
+        }
+        binding.inputMaxFps.setOnItemClickListener { _, _, position, _ ->
+            customMaxFps = FpsChoices.VALUES[position]
+        }
+        binding.inputCodec.setOnItemClickListener { _, _, position, _ ->
+            customCodec = VideoCodecOption.entries[position]
+        }
+        syncCustomDropdowns()
+        updatePerformanceUi()
+    }
+
+    private fun syncCustomDropdowns() {
+        binding.inputBitRate.setText(formatBitRate(BitRateChoices.nearest(customBitRate)), false)
+        val fps = FpsChoices.nearest(customMaxFps)
+        binding.inputMaxFps.setText(
+            if (fps == 0) "不限帧率" else "$fps fps",
+            false,
+        )
+        binding.inputCodec.setText(customCodec.label, false)
+    }
+
+    private fun updatePerformanceUi() {
+        val custom = selectedPerf == PerformancePreset.CUSTOM
+        binding.layoutPerfCustom.visibility = if (custom) View.VISIBLE else View.GONE
+        binding.textPerformanceHint.text = when (selectedPerf) {
+            PerformancePreset.BALANCED -> getString(R.string.perf_hint_balanced)
+            PerformancePreset.LOW_LATENCY -> getString(R.string.perf_hint_low_latency)
+            PerformancePreset.WEAK_NET -> getString(R.string.perf_hint_weak_net)
+            PerformancePreset.QUALITY -> getString(R.string.perf_hint_quality)
+            PerformancePreset.CUSTOM -> getString(R.string.perf_hint_custom)
+        }
     }
 
     private fun fillAddress(host: String, port: Int) {
@@ -505,5 +633,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_CUSTOM_MAX = "custom_max"
         private const val KEY_POWER_SAVE = "power_save"
         private const val KEY_APP_MODE = "app_mode"
+        private const val KEY_PERF = "perf_preset"
+        private const val KEY_BITRATE = "video_bitrate"
+        private const val KEY_MAX_FPS = "max_fps"
+        private const val KEY_CODEC = "video_codec"
+        private const val KEY_LOW_LATENCY = "low_latency_encode"
     }
 }

@@ -22,7 +22,18 @@
     <string name="resolution_hint_fixed">限制被控画面较长边不超过 %1$d px</string>
     <string name="resolution_hint_original">不限制分辨率（带宽和发热更高）</string>
     <string name="resolution_hint_custom">手动指定 scrcpy max_size（较长边上限）</string>
-    <string name="status_connecting_fmt">分辨率：%1$s（max_size=%2$s），正在打开投屏…</string>
+    <string name="label_performance">性能</string>
+    <string name="hint_performance">选择性能档位</string>
+    <string name="hint_bitrate">码率</string>
+    <string name="hint_max_fps">帧率</string>
+    <string name="hint_codec">编码</string>
+    <string name="label_low_latency">低延迟编码（优先流畅）</string>
+    <string name="perf_hint_balanced">8 Mbps · 不限帧率 · H.264，日常默认</string>
+    <string name="perf_hint_low_latency">4 Mbps · 60fps · H.264 · 低延迟编码，追帧更狠</string>
+    <string name="perf_hint_weak_net">2 Mbps · 30fps · H.265，弱网更稳</string>
+    <string name="perf_hint_quality">12 Mbps · 不限帧率 · H.265，更清晰更吃带宽</string>
+    <string name="perf_hint_custom">手动指定码率 / 帧率 / 编码</string>
+    <string name="status_connecting_fmt">%1$s · max_size=%2$s · %3$s，正在打开投屏…</string>
     <string name="label_power_save">被控端黑屏（省电）</string>
     <string name="hint_power_save">关闭被控手机物理屏幕背光，投屏与触控仍可用</string>
     <string name="cd_float_dot">展开投屏控制</string>
