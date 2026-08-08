@@ -116,6 +116,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         binding.switchPowerSave.setOnCheckedChangeListener { _, checked ->
             persistPowerSave(checked)
             scheduleAutoCollapse()
+            session?.setKeepDisplayOffOnStop(checked)
             if (controlReady) applyDisplayPower(blackout = checked)
         }
         binding.btnKeyboard.setOnClickListener {
@@ -218,6 +219,7 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
         if (userStopping || isFinishing) return
         val s = ScrcpySession(applicationContext, sessionConfig, this)
         session = s
+        s.setKeepDisplayOffOnStop(binding.switchPowerSave.isChecked)
         val surface = binding.surfaceView.holder.surface
         if (surface?.isValid == true) s.setSurface(surface)
         lifecycleScope.launch { s.start() }
@@ -271,7 +273,9 @@ class MirrorActivity : AppCompatActivity(), SurfaceHolder.Callback, ScrcpySessio
             clipboardBridge?.start()
             mainHandler.removeCallbacks(statsRunnable)
             mainHandler.post(statsRunnable)
-            if (binding.switchPowerSave.isChecked) applyDisplayPower(blackout = true)
+            val powerSave = binding.switchPowerSave.isChecked
+            session?.setKeepDisplayOffOnStop(powerSave)
+            if (powerSave) applyDisplayPower(blackout = true)
             expandOverlay(resetTimer = true)
         }
     }

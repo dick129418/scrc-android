@@ -70,6 +70,19 @@ class ScrcpySession(
     private var savedScreenOffTimeout: String? = null
     private var stayAwakeApplied = false
 
+    /** cleanup=false 时需自行还原；null 表示未记录 */
+    private var savedStayOnWhilePluggedIn: String? = null
+
+    /**
+     * 为 true 时：断开后保持物理屏黑屏，并继续维持唤醒（不还原 stayon / 息屏超时）。
+     * 用户可用电源键主动亮屏。
+     */
+    @Volatile
+    private var keepDisplayOffOnStop = false
+
+    /** 本次会话是否禁用了 scrcpy cleanup（避免退出时强制亮屏） */
+    private var cleanupDisabled = false
+
     fun setSurface(surface: Surface?) {
         decoder.setSurface(surface)
     }
@@ -80,6 +93,10 @@ class ScrcpySession(
     fun control(): ControlMessageWriter? = controlWriter
 
     fun snapshotStats(): Pair<Int, Int> = decoder.snapshotStats()
+
+    fun setKeepDisplayOffOnStop(enabled: Boolean) {
+        keepDisplayOffOnStop = enabled
+    }
 
     suspend fun start() = withContext(Dispatchers.IO) {
         if (!running.compareAndSet(false, true)) return@withContext
@@ -213,9 +230,10 @@ class ScrcpySession(
         controlJob = null
         shellDrainJob?.cancel()
         shellDrainJob = null
-        // 服务端 cleanup 也会恢复，这里主动亮屏更稳妥
+        val keepOff = keepDisplayOffOnStop
         try {
-            controlWriter?.setDisplayPowerSync(true)
+            // keepOff：断开前再关一次背光；否则主动亮屏（服务端 cleanup 也会恢复）
+            controlWriter?.setDisplayPowerSync(!keepOff)
         } catch (_: Exception) {
         }
         controlWriter?.close()
@@ -236,8 +254,18 @@ class ScrcpySession(
         videoStream = null
         controlStream = null
         shellStream = null
-        // 先恢复息屏策略，再关 ADB
-        restoreStayAwake(dataDadb)
+        if (keepOff) {
+            keepDisplayOffAndAwake(dataDadb)
+        } else {
+            // 先恢复息屏策略，再关 ADB
+            restoreStayAwake(dataDadb)
+            if (cleanupDisabled) {
+                // cleanup=false 时服务端不会还原 stay_on_while_plugged_in
+                restoreStayOnWhilePluggedIn(dataDadb)
+            } else {
+                savedStayOnWhilePluggedIn = null
+            }
+        }
         val shared = dataDadb != null && dataDadb === shellDadb
         try {
             dataDadb?.close()
@@ -294,7 +322,73 @@ class ScrcpySession(
         }
     }
 
+    /**
+     * 断开后保持黑屏 + 唤醒：不还原 stayon / screen_off_timeout。
+     * 若会话启用了 cleanup，服务端退出会亮屏，需再用 ADB 关背光（勿用 stayon+SLEEP，会把屏点亮）。
+     */
+    private fun keepDisplayOffAndAwake(dadb: Dadb?) {
+        if (dadb == null) {
+            stayAwakeApplied = false
+            savedScreenOffTimeout = null
+            return
+        }
+        try {
+            if (cleanupDisabled) {
+                // 背光已由 SET_DISPLAY_POWER=0 关闭，且 cleanup 不会恢复；勿再 stayon（部分机型会亮屏）
+                dadb.shell("settings put system screen_off_timeout $SCREEN_OFF_TIMEOUT_KEEP_AWAKE")
+                dadb.shell("settings put global stay_on_while_plugged_in 7")
+            } else {
+                // 会话带 cleanup：退出后会亮屏，再关背光并维持唤醒
+                Thread.sleep(500)
+                turnDisplayPowerOff(dadb)
+                dadb.shell("settings put system screen_off_timeout $SCREEN_OFF_TIMEOUT_KEEP_AWAKE")
+                dadb.shell("settings put global stay_on_while_plugged_in 7")
+                dadb.shell("svc power stayon true")
+                Thread.sleep(200)
+                turnDisplayPowerOff(dadb)
+            }
+            Log.i(TAG, "kept display off and stay awake after stop (cleanupDisabled=$cleanupDisabled)")
+        } catch (e: Exception) {
+            Log.w(TAG, "keep display off and awake failed: ${e.message}")
+        } finally {
+            stayAwakeApplied = false
+            savedScreenOffTimeout = null
+            savedStayOnWhilePluggedIn = null
+        }
+    }
+
+    /** 关物理背光但尽量保持系统唤醒（等价于会话中的 SET_DISPLAY_POWER=0） */
+    private fun turnDisplayPowerOff(dadb: Dadb) {
+        // Android 15+ / 部分 HyperOS
+        val off = dadb.shell("cmd display power-off 0 2>/dev/null; cmd display set-display-power 0 0 2>/dev/null; true")
+        Log.i(TAG, "turnDisplayPowerOff: ${off.output.trim().ifEmpty { "(ok/empty)" }}")
+    }
+
+    private fun restoreStayOnWhilePluggedIn(dadb: Dadb?) {
+        val restore = savedStayOnWhilePluggedIn
+        savedStayOnWhilePluggedIn = null
+        if (restore == null || dadb == null) return
+        try {
+            dadb.shell("settings put global stay_on_while_plugged_in $restore")
+            Log.i(TAG, "restored stay_on_while_plugged_in=$restore")
+        } catch (e: Exception) {
+            Log.w(TAG, "restore stay_on_while_plugged_in failed: ${e.message}")
+        }
+    }
+
     private fun startServer(dadb: Dadb) {
+        // 保持黑屏：禁用 cleanup，否则退出时 CleanUp 会 setDisplayPower(true) 强制亮屏
+        cleanupDisabled = keepDisplayOffOnStop
+        if (cleanupDisabled) {
+            try {
+                val old = dadb.shell("settings get global stay_on_while_plugged_in").output.trim()
+                if (old.isNotEmpty() && old != "null") {
+                    savedStayOnWhilePluggedIn = old
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "read stay_on_while_plugged_in failed: ${e.message}")
+            }
+        }
         val cmd = buildString {
             append("CLASSPATH=${ScrcpyConstants.SERVER_REMOTE_PATH} app_process / ")
             append("com.genymobile.scrcpy.Server ${ScrcpyConstants.SERVER_VERSION} ")
@@ -303,7 +397,7 @@ class ScrcpySession(
             append("audio=false ")
             append("control=true ")
             append("tunnel_forward=true ")
-            append("cleanup=true ")
+            append(if (cleanupDisabled) "cleanup=false " else "cleanup=true ")
             append("stay_awake=true ")
             append("video_bit_rate=${config.videoBitRate.coerceAtLeast(100_000)} ")
             if (config.videoCodec != VideoCodecOption.H264.serverValue) {

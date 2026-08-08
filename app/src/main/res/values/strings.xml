@@ -35,7 +35,7 @@
     <string name="perf_hint_custom">手动指定码率 / 帧率 / 编码</string>
     <string name="status_connecting_fmt">%1$s · max_size=%2$s · %3$s，正在打开投屏…</string>
     <string name="label_power_save">被控端黑屏（省电）</string>
-    <string name="hint_power_save">关闭被控手机物理屏幕背光，投屏与触控仍可用</string>
+    <string name="hint_power_save">关闭被控手机物理屏幕背光，投屏与触控仍可用；断开后保持黑屏并继续唤醒，可用电源键亮屏</string>
     <string name="cd_float_dot">展开投屏控制</string>
     <string name="action_disconnect">断开</string>
     <string name="action_keyboard">键盘</string>

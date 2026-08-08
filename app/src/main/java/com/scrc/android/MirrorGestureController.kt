@@ -1,12 +1,11 @@
 package com.scrc.android
 
-import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import kotlin.math.max
 
-/** 客户端捏合缩放 / 双指平移 / 双击；单指交给 [onSingleTouch]。 */
+/** 客户端捏合缩放 / 双指平移；单指交给 [onSingleTouch]。 */
 class MirrorGestureController(
     private val target: View,
     private val onSingleTouch: (MotionEvent) -> Boolean,
@@ -14,7 +13,6 @@ class MirrorGestureController(
     companion object {
         private const val MIN_SCALE = 1f
         private const val MAX_SCALE = 4f
-        private const val DOUBLE_TAP_SCALE = 2f
     }
 
     private var scale = 1f
@@ -35,25 +33,6 @@ class MirrorGestureController(
                 target.translationY += (fy - target.top - target.pivotY) * (1f - next / old)
                 scale = next
                 applyTransform()
-                return true
-            }
-        },
-    )
-
-    private val gestureDetector = GestureDetector(
-        target.context,
-        object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (scale > 1.05f) {
-                    reset()
-                } else {
-                    target.pivotX = e.x
-                    target.pivotY = e.y
-                    scale = DOUBLE_TAP_SCALE
-                    target.translationX = 0f
-                    target.translationY = 0f
-                    applyTransform()
-                }
                 return true
             }
         },
@@ -85,13 +64,11 @@ class MirrorGestureController(
                 panLastX = Float.NaN
                 panLastY = Float.NaN
                 scaleDetector.onTouchEvent(event)
-                gestureDetector.onTouchEvent(event)
                 if (wasMulti) return true
             }
         }
 
         scaleDetector.onTouchEvent(event)
-        gestureDetector.onTouchEvent(event)
 
         if (multiTouch || event.pointerCount > 1 || scaleDetector.isInProgress) {
             if (event.actionMasked == MotionEvent.ACTION_MOVE &&
